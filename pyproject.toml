@@ -1,0 +1,15 @@
+[project]
+name = "moodle-quiz-solver"
+version = "0.1.0"
+description = "Modular AI assistant for solving Moodle quizzes"
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unused_configs = true
+files = ["moodle_quiz_solver", "tests"]
