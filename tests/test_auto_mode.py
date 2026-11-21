@@ -80,6 +80,12 @@ class _FakeQuizPage:
             self._page_idx += 1
         return outcome
 
+    def navigate(self, url: str) -> None:
+        pass
+
+    def is_open(self) -> bool:
+        return True
+
 
 def test_run_auto_mode_completes_multiple_pages_and_arms_cancellation() -> None:
     q1 = Question(index=0, prompt="Q1?", question_type="radio", options=("A", "B"))

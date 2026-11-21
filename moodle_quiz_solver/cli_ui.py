@@ -118,7 +118,7 @@ class CliRenderer:
         panel = Panel(
             grid,
             title="Moodle Quiz Solver",
-            subtitle="[Enter] Auto  |  r/reset Reset  |  h/help Pomoc  |  q/quit Wyjście",
+            subtitle="[Enter] Auto  |  url Adres  |  open Otwórz  |  r Reset  |  h Pomoc  |  q Wyjście",
             border_style="blue",
             expand=False,
         )
@@ -130,6 +130,11 @@ class CliRenderer:
         table.add_column("Komenda", style="bold green", no_wrap=True)
         table.add_column("Działanie")
         table.add_row("[Enter]", "Uruchamia tryb AUTO na bieżącej stronie quizu")
+        table.add_row(
+            "url [adres]",
+            "Przechodzi pod nowy adres URL (lub otwiera przeglądarkę pod tym adresem)",
+        )
+        table.add_row("open", "Ponownie otwiera zamkniętą przeglądarkę pod bieżącym adresem")
         table.add_row("r / reset", "Resetuje kontekst rozmowy AI i cache materiałów")
         table.add_row("h / help", "Wyświetla tę tabelę komend")
         table.add_row("q / quit", "Zamyka przeglądarkę i kończy program")
