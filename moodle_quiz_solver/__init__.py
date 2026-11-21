@@ -28,6 +28,7 @@ from moodle_quiz_solver.quiz_page import (
     QuizPage,
     open_quiz_page,
 )
+from moodle_quiz_solver.solver import Solver
 
 __all__ = [
     "Answer",
@@ -44,6 +45,7 @@ __all__ = [
     "QuizPage",
     "QuizPageError",
     "ReferenceMaterial",
+    "Solver",
     "SolverError",
     "SubjectProfile",
     "TerminalCancellation",

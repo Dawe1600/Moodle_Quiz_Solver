@@ -16,6 +16,7 @@ class ReferenceMaterial:
 
     path: Path
     content: str = ""
+    raw_bytes: bytes = b""
 
 
 @dataclass(frozen=True, slots=True)
