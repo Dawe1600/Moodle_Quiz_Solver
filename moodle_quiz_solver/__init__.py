@@ -22,6 +22,12 @@ from moodle_quiz_solver.exceptions import (
     QuizPageError,
     SolverError,
 )
+from moodle_quiz_solver.quiz_page import (
+    NavigationOutcome,
+    PlaywrightQuizPage,
+    QuizPage,
+    open_quiz_page,
+)
 
 __all__ = [
     "Answer",
@@ -32,10 +38,14 @@ __all__ = [
     "ConfigurationError",
     "InMemoryCancellation",
     "MoodleQuizSolverError",
+    "NavigationOutcome",
+    "PlaywrightQuizPage",
     "Question",
+    "QuizPage",
     "QuizPageError",
     "ReferenceMaterial",
     "SolverError",
     "SubjectProfile",
     "TerminalCancellation",
+    "open_quiz_page",
 ]
