@@ -37,6 +37,7 @@ class PlaywrightQuizPage:
         self._page = page
 
     def extract_questions(self) -> list[Question]:
+        """Extract all normalized questions currently rendered on the page."""
         containers = self._page.locator(".que")
         questions: list[Question] = []
         for idx in range(containers.count()):
@@ -44,6 +45,7 @@ class PlaywrightQuizPage:
         return questions
 
     def apply_answer(self, question: Question, answer: Answer) -> None:
+        """Apply a structured answer to the corresponding question controls."""
         container = self._page.locator(".que").nth(question.index)
         if answer.answer_type in ("radio", "checkbox"):
             choice_pairs = self._find_choice_pairs(container)
@@ -86,46 +88,68 @@ class PlaywrightQuizPage:
                     f"for {len(text_inputs)} text inputs on question {question.index}."
                 )
             for idx, text_value in enumerate(answer.text_answers):
-                text_inputs[idx].fill(text_value)
+                try:
+                    text_inputs[idx].fill(text_value)
+                except Exception as exc:
+                    raise QuizPageError(
+                        f"Failed to fill text input {idx} of question {question.index}: {exc}"
+                    ) from exc
             return
 
         raise QuizPageError(f"Unsupported answer type: {answer.answer_type}")
 
     def advance(self) -> NavigationOutcome:
-        structural_finish = self._page.locator(
-            "input[name='finishattempt'], button[name='finishattempt'], "
+        """Advance to the next quiz page if available, or report completion/missing."""
+        if self._has_visible_match(
+            "input[name='finishattempt']:not([type='hidden']), "
+            "button[name='finishattempt'], "
             "[data-quiz-action='finish'], [data-action='finish-attempt'], "
-            "#mod_quiz-next-nav[data-finish='true']"
-        )
-        if structural_finish.count() > 0:
+            "#mod_quiz-next-nav[data-finish='true'], a.endtestlink"
+        ):
             return "finished"
 
-        polish_finish = self._page.locator(
+        if self._has_visible_match(
             "#mod_quiz-next-nav[value*='Zapisz podejście'], "
-            ".submitbtns input[value*='Zapisz podejście'], "
-            ".submitbtns button:has-text('Zapisz podejście')"
-        )
-        if polish_finish.count() > 0:
+            "#mod_quiz-next-nav[value*='Finish attempt'], "
+            ".submitbtns input[type='submit'][value*='Zapisz podejście'], "
+            ".submitbtns input[type='submit'][value*='Finish attempt'], "
+            ".submitbtns button:has-text('Zapisz podejście'), "
+            ".submitbtns button:has-text('Finish attempt')"
+        ):
             return "finished"
 
-        structural_next = self._page.locator(
-            "#mod_quiz-next-nav, form#responseform input[name='next'], "
-            "form#responseform button[name='next'], input[name='next'], button[name='next']"
+        next_btn = self._first_visible_match(
+            "#mod_quiz-next-nav:not([type='hidden']), "
+            "form#responseform input[name='next']:not([type='hidden']), "
+            "form#responseform button[name='next'], "
+            "input[name='next']:not([type='hidden']), "
+            "button[name='next']"
         )
-        if structural_next.count() > 0:
-            structural_next.first.click()
+        if next_btn is not None:
+            next_btn.click()
             return "next"
 
-        polish_next = self._page.locator(
-            ".submitbtns input[value*='Następna'], "
+        polish_next = self._first_visible_match(
+            ".submitbtns input[type='submit'][value*='Następna'], "
             "input[type='submit'][value*='Następna'], "
             ".submitbtns button:has-text('Następna')"
         )
-        if polish_next.count() > 0:
-            polish_next.first.click()
+        if polish_next is not None:
+            polish_next.click()
             return "next"
 
         return "missing"
+
+    def _has_visible_match(self, selector: str) -> bool:
+        return self._first_visible_match(selector) is not None
+
+    def _first_visible_match(self, selector: str) -> Locator | None:
+        locator = self._page.locator(selector)
+        for i in range(locator.count()):
+            candidate = locator.nth(i)
+            if candidate.is_visible():
+                return candidate
+        return None
 
     def _extract_question(self, index: int, container: Locator) -> Question:
         qtext_loc = container.locator(".qtext")
@@ -141,16 +165,7 @@ class PlaywrightQuizPage:
                 if label_loc is None:
                     option_texts.append("")
                     continue
-                lbl_text = label_loc.inner_text().strip()
-                lbl_images = self._capture_images(label_loc.locator("img"))
-                if lbl_images:
-                    start_num = len(images) + 1
-                    images.extend(lbl_images)
-                    tags = " ".join(
-                        f"[Obrazek #{start_num + offset}]" for offset in range(len(lbl_images))
-                    )
-                    lbl_text = f"{lbl_text} {tags}".strip()
-                option_texts.append(lbl_text)
+                option_texts.append(self._capture_tagged_text(label_loc, images))
 
             first_type = choice_pairs[0][0].get_attribute("type")
             q_type: Literal["radio", "checkbox"] = (
@@ -187,6 +202,16 @@ class PlaywrightQuizPage:
             slot_count=0,
         )
 
+    def _capture_tagged_text(self, target: Locator, images: list[bytes]) -> str:
+        text = target.inner_text().strip()
+        captured = self._capture_images(target.locator("img"))
+        if not captured:
+            return text
+        start_num = len(images) + 1
+        images.extend(captured)
+        tags = " ".join(f"[Image #{start_num + offset}]" for offset in range(len(captured)))
+        return f"{text} {tags}".strip()
+
     def _capture_images(self, img_locator: Locator) -> list[bytes]:
         captured: list[bytes] = []
         for i in range(img_locator.count()):
@@ -222,21 +247,13 @@ class PlaywrightQuizPage:
         for j in range(select_count):
             sel = selects.nth(j)
             row = sel.locator("xpath=./ancestor::tr").first
-            context_text = f"Lista {j + 1}"
+            context_text = f"Select {j + 1}"
             if row.count() > 0:
                 text_td = row.locator("td.text")
                 target = text_td.first if text_td.count() > 0 else row
-                td_str = target.inner_text().strip()
-                row_images = self._capture_images(target.locator("img"))
-                if row_images:
-                    start_num = len(images) + 1
-                    images.extend(row_images)
-                    tags = " ".join(
-                        f"[Obrazek #{start_num + offset}]" for offset in range(len(row_images))
-                    )
-                    td_str = f"{td_str} {tags}".strip()
-                if td_str:
-                    context_text = td_str
+                row_text = self._capture_tagged_text(target, images)
+                if row_text:
+                    context_text = row_text
 
             opts = self._extract_select_options(sel)
             for opt in opts:
@@ -313,13 +330,27 @@ class PlaywrightQuizPage:
         return None
 
     def _select_choice(self, input_loc: Locator, label_loc: Locator | None) -> None:
+        if input_loc.is_checked():
+            return
         try:
-            input_loc.check(force=True)
+            input_loc.check(force=True, timeout=2000)
+            return
         except Exception as exc:
             if label_loc is not None:
-                label_loc.click(position={"x": 5, "y": 5})
-            else:
-                raise QuizPageError(f"Failed to select choice input: {exc}") from exc
+                try:
+                    label_loc.click(position={"x": 5, "y": 5}, timeout=2000)
+                    if input_loc.is_checked():
+                        return
+                except Exception:
+                    pass
+            try:
+                input_loc.dispatch_event("click")
+            except Exception as dispatch_exc:
+                raise QuizPageError(
+                    f"Failed to select choice input: {dispatch_exc}"
+                ) from exc
+            if not input_loc.is_checked():
+                raise QuizPageError("Failed to select choice input.") from exc
 
 
 @contextmanager

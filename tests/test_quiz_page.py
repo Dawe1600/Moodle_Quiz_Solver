@@ -286,6 +286,17 @@ def test_extract_captures_question_option_and_matching_row_images_in_memory(
             False,
         ),
         (
+            '<form id="responseform"><input type="submit" id="mod_quiz-next-nav" name="next" '
+            'value="Finish attempt ..." onclick="window.__clicked=true; return false;" /></form>',
+            "finished",
+            False,
+        ),
+        (
+            '<form id="responseform"><input type="hidden" name="next" value="1" /></form>',
+            "missing",
+            False,
+        ),
+        (
             '<div class="que"><div class="qtext">No nav here</div></div>',
             "missing",
             False,
@@ -347,3 +358,36 @@ def test_open_quiz_page_launches_navigates_and_cleans_up() -> None:
 
     with ThreadPoolExecutor(max_workers=1) as pool:
         pool.submit(_run).result()
+
+
+def test_apply_answer_succeeds_when_mathjax_overlay_covers_input_and_preserves_checked_box(
+    browser_page: Page,
+) -> None:
+    browser_page.set_content(
+        """
+        <div class="que multichoice">
+          <div class="qtext">Pick covered options:</div>
+          <div class="answer" style="position:relative;">
+            <div class="r0" style="position:relative;">
+              <input type="checkbox" id="cov_0" checked />
+              <label for="cov_0">Already checked</label>
+            </div>
+            <div class="r1" style="position:relative;">
+              <input type="checkbox" id="cov_1" />
+              <div class="MathJax" style="position:absolute; inset:0; z-index:999;"></div>
+              <label for="cov_1">Covered by MathJax</label>
+            </div>
+          </div>
+        </div>
+        """
+    )
+    quiz_page = PlaywrightQuizPage(browser_page)
+    question = quiz_page.extract_questions()[0]
+
+    quiz_page.apply_answer(
+        question,
+        Answer(answer_type="checkbox", reasoning="both", selected_indices=(0, 1)),
+    )
+
+    assert browser_page.locator("#cov_0").is_checked()
+    assert browser_page.locator("#cov_1").is_checked()
