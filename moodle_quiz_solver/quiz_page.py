@@ -6,6 +6,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Literal, Protocol
 
+from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import Locator, Page, sync_playwright
 
 from moodle_quiz_solver.domain import Answer, Question
@@ -29,6 +30,14 @@ class QuizPage(Protocol):
         """Advance to the next quiz page if available, or report completion/missing."""
         ...
 
+    def navigate(self, url: str) -> None:
+        """Navigate the quiz page to a new URL."""
+        ...
+
+    def is_open(self) -> bool:
+        """Return whether the underlying page and browser are still open."""
+        ...
+
 
 class PlaywrightQuizPage:
     """Deep Quiz Page adapter hiding Playwright locators and Moodle DOM details."""
@@ -36,16 +45,40 @@ class PlaywrightQuizPage:
     def __init__(self, page: Page) -> None:
         self._page = page
 
+    def is_open(self) -> bool:
+        """Return whether the underlying page and browser are still open."""
+        try:
+            if self._page.is_closed():
+                return False
+            browser = self._page.context.browser
+            if browser is not None and not browser.is_connected():
+                return False
+            return True
+        except Exception:
+            return False
+
+    def navigate(self, url: str) -> None:
+        """Navigate the quiz page to a new URL."""
+        if not self.is_open():
+            raise QuizPageError("Przeglądarka jest zamknięta.")
+        with _translate_playwright_errors(f"Nie udało się otworzyć adresu URL '{url}'"):
+            self._page.goto(url)
+
     def extract_questions(self) -> list[Question]:
         """Extract all normalized questions currently rendered on the page."""
-        containers = self._page.locator(".que")
-        questions: list[Question] = []
-        for idx in range(containers.count()):
-            questions.append(self._extract_question(idx, containers.nth(idx)))
-        return questions
+        with _translate_playwright_errors("Błąd odczytu strony quizu"):
+            containers = self._page.locator(".que")
+            questions: list[Question] = []
+            for idx in range(containers.count()):
+                questions.append(self._extract_question(idx, containers.nth(idx)))
+            return questions
 
     def apply_answer(self, question: Question, answer: Answer) -> None:
         """Apply a structured answer to the corresponding question controls."""
+        with _translate_playwright_errors("Błąd zaznaczania odpowiedzi na stronie quizu"):
+            self._apply_answer_inner(question, answer)
+
+    def _apply_answer_inner(self, question: Question, answer: Answer) -> None:
         container = self._page.locator(".que").nth(question.index)
         if answer.answer_type in ("radio", "checkbox"):
             choice_pairs = self._find_choice_pairs(container)
@@ -100,6 +133,10 @@ class PlaywrightQuizPage:
 
     def advance(self) -> NavigationOutcome:
         """Advance to the next quiz page if available, or report completion/missing."""
+        with _translate_playwright_errors("Błąd nawigacji strony quizu"):
+            return self._advance_inner()
+
+    def _advance_inner(self) -> NavigationOutcome:
         if self._has_visible_match(
             "form#responseform input[name='finishattempt']:not([type='hidden']), "
             "form#responseform button[name='finishattempt'], "
@@ -362,6 +399,17 @@ class PlaywrightQuizPage:
 
 
 @contextmanager
+def _translate_playwright_errors(action: str) -> Iterator[None]:
+    """Translate Playwright driver errors into domain QuizPageError."""
+    try:
+        yield
+    except QuizPageError:
+        raise
+    except PlaywrightError as exc:
+        raise QuizPageError(f"{action}: {exc}") from exc
+
+
+@contextmanager
 def open_quiz_page(
     start_url: str | None = None,
     *,
@@ -369,14 +417,20 @@ def open_quiz_page(
 ) -> Iterator[PlaywrightQuizPage]:
     """Launch Playwright Chromium, optionally navigate to start_url, and guarantee teardown."""
     launch_args = [] if headless else ["--start-maximized"]
-    with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(headless=headless, args=launch_args)
-        context = browser.new_context(no_viewport=not headless)
-        try:
-            page = context.new_page()
-            if start_url is not None:
-                page.goto(start_url)
-            yield PlaywrightQuizPage(page)
-        finally:
-            context.close()
-            browser.close()
+    try:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=headless, args=launch_args)
+            context = browser.new_context(no_viewport=not headless)
+            try:
+                page = context.new_page()
+                if start_url is not None:
+                    page.goto(start_url)
+                yield PlaywrightQuizPage(page)
+            finally:
+                for closer in (context.close, browser.close):
+                    try:
+                        closer()
+                    except Exception:
+                        pass
+    except PlaywrightError as exc:
+        raise QuizPageError(f"Błąd przeglądarki Playwright: {exc}") from exc

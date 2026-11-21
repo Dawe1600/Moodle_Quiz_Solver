@@ -69,6 +69,12 @@ def test_bot_main_honors_cli_flags_and_interactive_controls(
         def advance(self) -> NavigationOutcome:
             return "finished"
 
+        def navigate(self, url: str) -> None:
+            pass
+
+        def is_open(self) -> bool:
+            return True
+
     fake_page = _FakeQuizPage()
 
     @contextmanager
@@ -170,6 +176,12 @@ def test_bot_main_auto_selects_defaults_and_handles_rich_shell_commands(
         def advance(self) -> NavigationOutcome:
             return "finished"
 
+        def navigate(self, url: str) -> None:
+            pass
+
+        def is_open(self) -> bool:
+            return True
+
     @contextmanager
     def _fake_open_quiz_page(start_url: str | None = None) -> Iterator[_FakeQuizPage]:
         yield _FakeQuizPage()
@@ -222,9 +234,13 @@ def test_bot_main_disables_tty_spinner_when_using_custom_output_fn(
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr("shutil.which", lambda name: "/usr/bin/agy" if name == "agy" else None)
 
+    class _MinimalQuizPage:
+        def is_open(self) -> bool:
+            return True
+
     @contextmanager
     def _fake_open_quiz_page(start_url: str | None = None) -> Iterator[object]:
-        yield object()
+        yield _MinimalQuizPage()
 
     class _FakeAgyTransport:
         def __init__(self, *, agy_bin: str, model: str, cancellation: object) -> None:
@@ -338,6 +354,9 @@ def test_bot_main_live_profile_switching_and_cancel(
         def advance(self) -> NavigationOutcome:
             return "finished"
 
+        def is_open(self) -> bool:
+            return True
+
     @contextmanager
     def _fake_open_quiz_page(start_url: str | None = None) -> Iterator[_FakeQuizPage]:
         nonlocal browser_opens
@@ -412,6 +431,9 @@ def test_bot_main_live_backend_switching_and_unavailable_rollback(
 
         def advance(self) -> NavigationOutcome:
             return "finished"
+
+        def is_open(self) -> bool:
+            return True
 
     @contextmanager
     def _fake_open_quiz_page(start_url: str | None = None) -> Iterator[_FakeQuizPage]:
@@ -520,6 +542,9 @@ def test_bot_main_model_switching_for_agy_and_api_and_cancel(
         def advance(self) -> NavigationOutcome:
             return "finished"
 
+        def is_open(self) -> bool:
+            return True
+
     @contextmanager
     def _fake_open_quiz_page(start_url: str | None = None) -> Iterator[_FakeQuizPage]:
         yield _FakeQuizPage()
@@ -597,6 +622,9 @@ class _FakeStepQuizPage:
     def advance(self) -> NavigationOutcome:
         self.advance_calls += 1
         return "next"
+
+    def is_open(self) -> bool:
+        return True
 
 
 def _patch_fake_cli(
@@ -718,3 +746,218 @@ def test_bot_main_confirm_before_next_accepts_then_declines_advancement(
     assert len(fake_page.applied) == 2
     assert "Strony: 2" in joined
     assert "Pytania: 2" in joined
+
+
+def test_bot_main_url_and_open_commands_and_closed_browser_recovery(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("shutil.which", lambda name: "/usr/bin/agy" if name == "agy" else None)
+
+    opened_urls: list[str | None] = []
+    navigated_urls: list[str] = []
+    closed_instances = 0
+
+    class _FakeQuizPage:
+        def __init__(self) -> None:
+            self.open = True
+            self.fail_next_extract = False
+
+        def extract_questions(self) -> list[Question]:
+            if self.fail_next_extract:
+                self.open = False
+                from moodle_quiz_solver.exceptions import QuizPageError
+
+                raise QuizPageError("Target page, context or browser has been closed")
+            return [Question(index=0, prompt="2+2?", question_type="radio", options=("3", "4"))]
+
+        def apply_answer(self, question: Question, answer: Answer) -> None:
+            pass
+
+        def advance(self) -> NavigationOutcome:
+            return "finished"
+
+        def navigate(self, url: str) -> None:
+            navigated_urls.append(url)
+
+        def is_open(self) -> bool:
+            return self.open
+
+    pages: list[_FakeQuizPage] = []
+
+    @contextmanager
+    def _fake_open_quiz_page(start_url: str | None = None) -> Iterator[_FakeQuizPage]:
+        nonlocal closed_instances
+        opened_urls.append(start_url)
+        page = _FakeQuizPage()
+        pages.append(page)
+        try:
+            yield page
+        finally:
+            closed_instances += 1
+
+    class _FakeAgyTransport:
+        def __init__(self, *, agy_bin: str, model: str, cancellation: object) -> None:
+            pass
+
+        def generate(self, request: object) -> str:
+            return '{"answer_type": "radio", "selected_indices": [1], "reasoning": "ok"}'
+
+        def reset_session(self) -> None:
+            pass
+
+    monkeypatch.setattr(bot, "open_quiz_page", _fake_open_quiz_page)
+    monkeypatch.setattr(bot, "AgyTransport", _FakeAgyTransport)
+
+    def _drive_inputs() -> Iterator[str]:
+        # 1. Run Auto Mode once successfully
+        yield ""
+        # 2. `open` while already open
+        yield "open"
+        # 3. `url` with inline argument
+        yield "url https://moodle.test/QuizOne"
+        # 4. `url` with empty prompt (rejected)
+        yield "url"
+        yield "   "
+        # 5. Simulate browser crash/closure during next Auto Mode
+        pages[-1].fail_next_extract = True
+        yield ""
+        # 6. Auto Mode while closed -> blocked with clear message
+        yield ""
+        # 7. `open` reopens at updated URL
+        yield "open"
+        # 8. Simulate user closing window manually before `url`
+        pages[-1].open = False
+        yield "url"
+        yield "https://moodle.test/QuizTwo"
+        # 9. Close manually again and quit -> exits cleanly with 0
+        pages[-1].open = False
+        yield "q"
+
+    inputs = _drive_inputs()
+    logs: list[str] = []
+    exit_code = bot.main(
+        ["--url", "https://moodle.test/start"],
+        input_fn=lambda _prompt: next(inputs),
+        output_fn=logs.append,
+    )
+
+    joined = "\n".join(logs)
+    assert exit_code == 0
+    assert navigated_urls == ["https://moodle.test/QuizOne"]
+    assert opened_urls == [
+        "https://moodle.test/start",
+        "https://moodle.test/QuizOne",
+        "https://moodle.test/QuizTwo",
+    ]
+    assert closed_instances == 3
+    assert "Przeglądarka jest już otwarta." in joined
+    assert "Adres URL nie może być pusty." in joined
+    assert "Zamknięta" in joined
+    assert "Strony: 1" in joined
+    assert "Pytania: 1" in joined
+
+
+def test_bot_main_recovers_when_initial_browser_launch_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("shutil.which", lambda name: "/usr/bin/agy" if name == "agy" else None)
+
+    @contextmanager
+    def _failing_open_quiz_page(start_url: str | None = None) -> Iterator[object]:
+        from moodle_quiz_solver.exceptions import QuizPageError
+
+        raise QuizPageError("Browser failed to launch")
+        yield  # pragma: no cover
+
+    class _FakeAgyTransport:
+        def __init__(self, *, agy_bin: str, model: str, cancellation: object) -> None:
+            pass
+
+        def generate(self, request: object) -> str:
+            return "{}"
+
+        def reset_session(self) -> None:
+            pass
+
+    monkeypatch.setattr(bot, "open_quiz_page", _failing_open_quiz_page)
+    monkeypatch.setattr(bot, "AgyTransport", _FakeAgyTransport)
+
+    commands = iter(["", "q"])
+    logs: list[str] = []
+    exit_code = bot.main([], input_fn=lambda _prompt: next(commands), output_fn=logs.append)
+
+    joined = "\n".join(logs)
+    assert exit_code == 0
+    assert "Zamknięta" in joined
+    assert "open" in joined.lower()
+
+
+def test_bot_main_closed_browser_guard_protects_step_mode(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("shutil.which", lambda name: "/usr/bin/agy" if name == "agy" else None)
+
+    class _ClosingStepQuizPage:
+        def __init__(self) -> None:
+            self.open = True
+            self.fail_next_extract = False
+
+        def extract_questions(self) -> list[Question]:
+            if self.fail_next_extract:
+                self.open = False
+                from moodle_quiz_solver.exceptions import QuizPageError
+
+                raise QuizPageError("Target page, context or browser has been closed")
+            return [Question(index=0, prompt="Q?", question_type="radio", options=("A", "B"))]
+
+        def apply_answer(self, question: Question, answer: Answer) -> None:
+            pass
+
+        def advance(self) -> NavigationOutcome:
+            raise AssertionError("step mode must not advance")
+
+        def is_open(self) -> bool:
+            return self.open
+
+    pages: list[_ClosingStepQuizPage] = []
+
+    @contextmanager
+    def _fake_open_quiz_page(start_url: str | None = None) -> Iterator[_ClosingStepQuizPage]:
+        page = _ClosingStepQuizPage()
+        pages.append(page)
+        yield page
+
+    class _FakeAgyTransport:
+        def __init__(self, *, agy_bin: str, model: str, cancellation: object) -> None:
+            pass
+
+        def generate(self, request: object) -> str:
+            return '{"answer_type": "radio", "selected_indices": [0], "reasoning": "ok"}'
+
+        def reset_session(self) -> None:
+            pass
+
+    monkeypatch.setattr(bot, "open_quiz_page", _fake_open_quiz_page)
+    monkeypatch.setattr(bot, "AgyTransport", _FakeAgyTransport)
+
+    def _drive_inputs() -> Iterator[str]:
+        pages[-1].fail_next_extract = True
+        yield "s"
+        yield "step"
+        yield "q"
+
+    inputs = _drive_inputs()
+    logs: list[str] = []
+    exit_code = bot.main([], input_fn=lambda _prompt: next(inputs), output_fn=logs.append)
+
+    joined = "\n".join(logs)
+    assert exit_code == 0
+    assert "Przeglądarka jest zamknięta. Użyj 'open' lub 'url', aby ją otworzyć." in joined
+    assert "Zamknięta" in joined
+    assert "Strony: 1" not in joined

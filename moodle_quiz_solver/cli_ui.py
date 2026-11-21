@@ -133,7 +133,7 @@ class CliRenderer:
         panel = Panel(
             grid,
             title="Moodle Quiz Solver",
-            subtitle="[Enter] Auto  |  s/step Krok  |  p Profil  |  b Silnik  |  m Model  |  o/options Opcje  |  r/reset Reset  |  h/help Pomoc  |  q/quit Wyjście",
+            subtitle="[Enter] Auto  |  s/step Krok  |  p Profil  |  b Silnik  |  m Model  |  o/options Opcje  |  url Adres  |  open Otwórz  |  r/reset Reset  |  h/help Pomoc  |  q/quit Wyjście",
             border_style="blue",
             expand=False,
         )
@@ -150,6 +150,11 @@ class CliRenderer:
         table.add_row("b / backend", "Przełącza silnik AI (agy / api) bez zamykania przeglądarki")
         table.add_row("m / model", "Wybiera lub wpisuje model AI dla aktywnego silnika")
         table.add_row("o / options", "Otwiera menu opcji sesji")
+        table.add_row(
+            "url [adres]",
+            "Przechodzi pod nowy adres URL (lub otwiera przeglądarkę pod tym adresem)",
+        )
+        table.add_row("open", "Ponownie otwiera zamkniętą przeglądarkę pod bieżącym adresem")
         table.add_row("r / reset", "Resetuje kontekst rozmowy AI i cache materiałów")
         table.add_row("h / help", "Wyświetla tę tabelę komend")
         table.add_row("q / quit", "Zamyka przeglądarkę i kończy program")

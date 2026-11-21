@@ -429,3 +429,71 @@ def test_apply_answer_succeeds_when_mathjax_overlay_covers_input_and_preserves_c
 
     assert browser_page.locator("#cov_0").is_checked()
     assert browser_page.locator("#cov_1").is_checked()
+
+
+def test_playwright_quiz_page_navigate_and_is_open() -> None:
+    first_url = "data:text/html,<div class='que'><div class='qtext'>Page 1</div></div>"
+    second_url = "data:text/html,<div class='que'><div class='qtext'>Page 2</div></div>"
+
+    def _run() -> None:
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(headless=True)
+            context = browser.new_context()
+            page = context.new_page()
+            quiz_page = PlaywrightQuizPage(page)
+
+            assert quiz_page.is_open() is True
+            quiz_page.navigate(first_url)
+            assert quiz_page.extract_questions()[0].prompt == "Page 1"
+
+            quiz_page.navigate(second_url)
+            assert quiz_page.extract_questions()[0].prompt == "Page 2"
+
+            page.close()
+            assert quiz_page.is_open() is False
+            with pytest.raises(QuizPageError):
+                quiz_page.navigate(first_url)
+
+            context.close()
+            browser.close()
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        pool.submit(_run).result()
+
+
+def test_open_quiz_page_handles_user_closed_browser_on_exit() -> None:
+    def _run() -> None:
+        with open_quiz_page(start_url="data:text/html,<p>Hi</p>", headless=True) as quiz_page:
+            assert quiz_page.is_open() is True
+            quiz_page._page.context.browser.close()  # type: ignore[union-attr]
+            assert quiz_page.is_open() is False
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        pool.submit(_run).result()
+
+
+def test_playwright_quiz_page_translates_closed_page_errors_to_quiz_page_error() -> None:
+    def _run() -> None:
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(headless=True)
+            context = browser.new_context()
+            page = context.new_page()
+            quiz_page = PlaywrightQuizPage(page)
+            page.close()
+
+            with pytest.raises(QuizPageError):
+                quiz_page.extract_questions()
+            with pytest.raises(QuizPageError):
+                quiz_page.apply_answer(
+                    Question(index=0, prompt="Q", question_type="text", slot_count=1),
+                    Answer(answer_type="text", reasoning="r", text_answers=("a",)),
+                )
+            with pytest.raises(QuizPageError):
+                quiz_page.advance()
+
+            context.close()
+            browser.close()
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        pool.submit(_run).result()
+
