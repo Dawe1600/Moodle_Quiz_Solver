@@ -1,8 +1,12 @@
 .env
+profiles.json
 venv/
 __pycache__/
 *.pyc
 .DS_Store
 .idea/
 .vscode/
+.tmp_images/
+materials/
+*.pdf
 get_groq_models.py

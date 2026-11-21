@@ -1,75 +1,40 @@
-# Moodle MathQuiz Solver
+# Moodle Quiz Solver
 
-Ten projekt to Twój prywatny asystent AI, który pomaga w automatycznym rozwiązywaniu quizów matematycznych na platformie Moodle. Skrypt korzysta z biblioteki **Playwright** do nawigowania po stronie, a jako głównego mózgu używa najnowocześniejszych modeli tekstowych i wizyjnych z **Google AI Studio**.
+Uniwersalny asystent AI do rozwiązywania quizów na platformie Moodle (dowolny przedmiot). Skrypt korzysta z biblioteki **Playwright** do obsługi przeglądarki, a jako silnik AI domyślnie wykorzystuje **Antigravity CLI (`agy`)** na Twojej subskrypcji (z opcjonalnym fallbackiem na Google AI Studio API).
 
 ## Cechy projektu
-- **Pełna automatyzacja:** Bot sam czyta treść, zaznacza odpowiedzi (pojedynczego oraz wielokrotnego wyboru) i wpisuje tekst w puste pola.
-- **W 100% za darmo:** Cały system opiera się na dostępie do darmowych modeli (free tier) w Google AI Studio, dzięki czemu korzystanie z bota nie kosztuje Cię ani grosza.
-- **Analiza obrazków:** Masz na teście skomplikowany wykres albo wzór w formie zdjęcia? Skrypt prześle je do modeli Vision, które przeanalizują układ graficzny i "odczytają" zadanie.
-- **Zaawansowana Matematyka:** Po zebraniu danych z ekranu, trafiają one do inteligentnych modeli matematycznych, które zajmują się rozwiązywaniem obliczeń.
-- **Zawsze pod Twoją kontrolą:** W każdej ułamku sekundy podczas pracy skryptu możesz po prostu nacisnąć klawisz **ESC** w swoim terminalu. Bot momentalnie wstrzyma tryb automatyczny, dzięki czemu unikniesz jakichkolwiek problemów.
+- **Uniwersalne profile przedmiotowe (`profiles.json`):** Wybór przedmiotu przy starcie (np. Ogólny, Probabilistyka i Statystyka, Matematyka, Sieci Komputerowe / IT) z dedykowanym promptem systemowym i modelem.
+- **Podpinanie materiałów źródłowych (PDF / MD):** Możesz wskazać wykłady lub notatki z dysku (np. z sejfu Obsidian), na których AI opiera odpowiedzi w pierwszej kolejności.
+- **Subskrypcja zamiast osobnego API (`agy CLI`):** Domyślnie używa `agy -p` w trybie ustrukturyzowanego JSON-a i utrzymuje kontekst w ramach jednego quizu (`--conversation`).
+- **Pełna obsługa typów pytań Moodle:**
+  - Jednokrotnego wyboru (`radio`)
+  - Wielokrotnego wyboru (`checkbox`)
+  - Pytania otwarte (`text` / `textarea`)
+  - Dopasowanie (`select` - wiele list rozwijanych + analiza obrazków w wierszach)
+- **Zawsze pod Twoją kontrolą:** W każdej chwili możesz wcisnąć **ESC**, żeby natychmiast przerwać tryb `AUTO`. Dodatkowo bot wypisuje krótkie uzasadnienie każdej decyzji AI.
 
-## Obsługiwane typy pytań
-Bot bez problemu radzi sobie z najpopularniejszymi formatami testów na platformie Moodle:
-- **Jednokrotnego wyboru** (Pola typu Radio)
-- **Wielokrotnego wyboru** (Checkboxy - bot z automatu wie, żeby szukać wielu poprawnych odpowiedzi)
-- **Pytania otwarte** (Wpisywanie obliczonego wyniku do pustego pola tekstowego)
-- **Dopasowanie** (Zaawansowana obsługa wielu list rozwijanych `select` jednocześnie, wraz z analizowaniem zdjęć przypisanych do poszczególnych wierszy!)
+## Szybka instalacja
 
-## Pobranie projektu
-
-Aby zacząć, po prostu skopiuj ten projekt na swój dysk za pomocą programu git i wejdź do nowo utworzonego folderu:
-```bash
-git clone https://github.com/Dawe1600/Moodle_MathQuiz_Solver.git
-cd Moodle_MathQuiz_Solver
-```
-
-## Szybka instalacja (Automatycznie)
-
-Dla ułatwienia instalacji przygotowane zostały automatyczne skrypty przygotowujące środowisko. Wystarczy je uruchomić w głównym folderze:
-
-- **Windows:** Dwukliknij na plik `setup.bat` lub uruchom go w terminalu:
+- **Windows:**
   ```cmd
   .\setup.bat
   ```
-
-- **Linux/macOS:** Nadaj skryptowi uprawnienia do wykonania i uruchom go w terminalu:
+- **Linux/macOS:**
   ```bash
   chmod +x setup.sh
   ./setup.sh
   ```
 
-## Ręczna instalacja
+## Konfiguracja
 
-Jeżeli preferujesz ręczną instalację krok po kroku:
-1. Zainstaluj wirtualne środowisko (venv): `python -m venv venv`
-2. Aktywuj środowisko: 
-   - Windows: `.\venv\Scripts\activate`
-   - Linux/Mac: `source venv/bin/activate`
-3. Zainstaluj biblioteki: `pip install -r requirements.txt`
-4. Zainstaluj przeglądarki dla Playwright: `playwright install`
-
-## Konfiguracja API
-
-Zanim włączysz bota, powinieneś posiadać klucz API od Google AI Studio. 
-1. Utwórz kopię pliku `.env.example` w tym samym folderze i nazwij ją **`.env`**.
-2. Wklej do niej swój klucz w miejsce `twoj_klucz_z_google_ai_studio`:
-   ```env
-   GEMINI_API_KEY=tu_wklej_swoj_klucz
-   ```
+1. **Silnik domyślny (`agy CLI`):** Jeśli masz zainstalowane i zalogowane `agy` w systemowym `PATH`, bot wykryje je automatycznie - nie potrzebujesz klucza API.
+2. **Opcjonalny fallback (Google AI Studio API):** Skopiuj `.env.example` do `.env` i uzupełnij `GEMINI_API_KEY`.
+3. **Profile i materiały (`profiles.json`):** Skopiuj `profiles.example.json` do `profiles.json` i dodaj lub edytuj ścieżki do własnych plików `.pdf` / `.md` w polu `materials_paths`.
 
 ## Użycie Bota
 
-1. Aktywuj środowisko wirtualne (jeśli terminal został wyłączony).
-2. Wpisz w terminalu polecenie uruchamiające bota:
-   ```bash
-   python bot.py
-   ```
-3. Otworzy się przeglądarka Chromium. **Zaloguj się na Moodle i wejdź do wybranego Quizu**, bezpośrednio na stronę z pierwszym pytaniem.
-4. W terminalu naciśnij klawisz `ENTER`, aby przejść w Tryb Automatyczny (AUTO).
-5. Bot samodzielnie będzie odpowiadał na pytania, przeskakiwał na następne strony i przetwarzał całą platformę, aż do momentu trafienia na "Zapisz podejście".
-
-### Przerywanie Bota (Klawisz ESC)
-- W dowolnym ułamku sekundy, przebywając w oknie terminala, możesz wcisnąć klawisz **ESC**. 
-- Zabezpiecza to przed np. dziwnymi zachowaniami platformy Moodle. 
-- Tryb automatyczny natychmiastowo zostanie wyłączony dla następnych akcji - bot poczeka na Twój "Enter" zanim wyśle kolejne zapytanie lub przejdzie na nową stronę.
+1. Aktywuj środowisko wirtualne: `.\venv\Scripts\activate`
+2. Uruchom: `python bot.py`
+3. Wybierz silnik AI i profil przedmiotu.
+4. Zaloguj się na Moodle w otwartym oknie Chromium i wejdź do quizu.
+5. Wciśnij `Enter` w terminalu, aby włączyć tryb `AUTO` (albo `ESC`, żeby zatrzymać; `r` resetuje kontekst AI przed nowym quizem).

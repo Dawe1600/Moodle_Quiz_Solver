@@ -1,7 +1,6 @@
 #!/bin/bash
-
 echo "========================================================"
-echo "Konfigurowanie srodowiska dla Moodle MathQuiz Solver..."
+echo "Konfigurowanie srodowiska dla Moodle Quiz Solver..."
 echo "========================================================"
 
 echo ""
@@ -15,17 +14,15 @@ pip install -r requirements.txt
 
 echo ""
 echo "Instalowanie przegladarek dla biblioteki Playwright..."
-playwright install
+playwright install chromium
 
 echo ""
 echo "========================================================"
 echo "Konfiguracja zakonczona sukcesem!"
-echo "========================================================"
-echo "UWAGA: Przed uruchomieniem skryptu upewnij sie, ze:"
-echo "1. Skopiowales plik .env.example i nazwales go .env"
-echo "2. Wpisales swoj darmowy klucz GEMINI_API_KEY w pliku .env"
+echo "Domyslny silnik: agy CLI (subskrypcja Antigravity)."
+echo "Opcjonalnie (dla fallbacku API): skopiuj .env.example do .env i wpisz GEMINI_API_KEY."
 echo ""
 echo "Aby uruchomic bota, wpisz w konsoli:"
 echo "source venv/bin/activate"
-echo "python3 bot.py"
+echo "python bot.py"
 echo "========================================================"

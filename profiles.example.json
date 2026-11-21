@@ -1,0 +1,40 @@
+{
+  "ogolny": {
+    "name": "Ogólny (dowolny przedmiot)",
+    "model": "gemini-3.8-flash-medium",
+    "fallback_models": [
+      "gemma-4-31b-it",
+      "gemma-4-26b-a4b-it",
+      "gemini-3-flash-preview",
+      "gemini-3.1-flash-lite"
+    ],
+    "system_prompt": "Jesteś wszechstronnym ekspertem akademickim. Rozwiązujesz pytania testowe na platformie Moodle z różnych dziedzin nauki. Analizuj treść uważnie, nie zgaduj bez sprawdzenia faktów i podaj zwięzłe uzasadnienie.",
+    "materials_paths": []
+  },
+  "matematyka": {
+    "name": "Matematyka",
+    "model": "gemini-4-hydrogen-medium",
+    "fallback_models": [
+      "gemma-4-31b-it",
+      "gemma-4-26b-a4b-it",
+      "gemini-3.8-flash-medium",
+      "gemini-3-flash-preview"
+    ],
+    "system_prompt": "Jesteś ekspertem z matematyki. Rozwiązujesz zadania na platformie Moodle. Wykonuj dokładne obliczenia algebraiczne i analityczne przed wskazaniem odpowiedzi.",
+    "materials_paths": []
+  },
+  "przedmiot_z_materialami": {
+    "name": "Przykładowy przedmiot (z własnym PDF)",
+    "model": "gemini-4-hydrogen-medium",
+    "fallback_models": [
+      "gemma-4-31b-it",
+      "gemma-4-26b-a4b-it",
+      "gemini-3.8-flash-medium",
+      "gemini-3-flash-preview"
+    ],
+    "system_prompt": "Jesteś ekspertem w danej dziedzinie. Jeśli masz podpięte materiały źródłowe (PDF/MD), traktuj je jako główne źródło wiedzy, definicji i wzorów.",
+    "materials_paths": [
+      "C:\\sciezka\\do\\twoich\\materialow.pdf"
+    ]
+  }
+}
