@@ -435,3 +435,102 @@ def test_select_runtime_unknown_cli_profile_fails_before_backend_prompt(
             input_fn=fail_input,
             output_fn=lambda _: None,
         )
+
+
+def test_collect_available_models_deduplicates_with_active_profile_first() -> None:
+    from moodle_quiz_solver.config import collect_available_models
+    from moodle_quiz_solver.domain import SubjectProfile
+
+    profiles = {
+        "p1": SubjectProfile(
+            key="p1",
+            name="P1",
+            model="m-shared",
+            system_prompt="s1",
+            fallback_models=("m-fb1", "m-shared"),
+        ),
+        "p2": SubjectProfile(
+            key="p2",
+            name="P2",
+            model="m-active",
+            system_prompt="s2",
+            fallback_models=("m-shared", "m-fb2", "m-fb1"),
+        ),
+    }
+
+    assert collect_available_models(profiles, active_profile_key="p2") == (
+        "m-active",
+        "m-shared",
+        "m-fb2",
+        "m-fb1",
+    )
+
+
+def test_runtime_selection_model_override_orders_agy_and_api_models() -> None:
+    from moodle_quiz_solver.config import RuntimeSelection
+    from moodle_quiz_solver.domain import SubjectProfile
+
+    profile = SubjectProfile(
+        key="p1",
+        name="P1",
+        model="m-primary",
+        system_prompt="s1",
+        fallback_models=("m-fb1", "m-fb2", "m-fb1"),
+    )
+
+    agy_sel = RuntimeSelection(
+        backend="agy",
+        agy_bin="/usr/bin/agy",
+        profile=profile,
+        moodle_url="https://moodle.test",
+        gemini_api_key="AIzaRealKey",
+        model_override="m-custom",
+    )
+    assert agy_sel.active_model == "m-custom"
+    assert agy_sel.agy_model == "m-custom"
+
+    api_sel = RuntimeSelection(
+        backend="api",
+        agy_bin=None,
+        profile=profile,
+        moodle_url="https://moodle.test",
+        gemini_api_key="AIzaRealKey",
+        model_override="m-fb2",
+    )
+    assert api_sel.active_model == "m-fb2"
+    assert api_sel.api_models == ("m-fb2", "m-fb1")
+
+
+def test_resolve_backend_switch_validates_availability_with_polish_errors(
+    tmp_path: Path,
+) -> None:
+    from moodle_quiz_solver.config import resolve_backend_switch
+
+    no_key_config = load_config(
+        profiles_path=tmp_path / "missing.json",
+        env_path=tmp_path / ".env",
+        env={},
+        cli_args=[],
+    )
+
+    with pytest.raises(ConfigurationError, match="agy"):
+        resolve_backend_switch("agy", no_key_config, which=lambda _: None, has_genai=True)
+
+    with pytest.raises(ConfigurationError, match="GEMINI_API_KEY"):
+        resolve_backend_switch("api", no_key_config, which=lambda _: "/usr/bin/agy", has_genai=True)
+
+    with_key_config = load_config(
+        profiles_path=tmp_path / "missing.json",
+        env_path=tmp_path / ".env",
+        env={"GEMINI_API_KEY": "AIzaRealKey"},
+        cli_args=[],
+    )
+    with pytest.raises(ConfigurationError, match="google-genai"):
+        resolve_backend_switch("api", with_key_config, which=lambda _: "/usr/bin/agy", has_genai=False)
+
+    assert resolve_backend_switch(
+        "agy", with_key_config, which=lambda _: "/usr/bin/agy", has_genai=False
+    ) == ("agy", "/usr/bin/agy")
+    assert resolve_backend_switch(
+        "api", with_key_config, which=lambda _: None, has_genai=True
+    ) == ("api", None)

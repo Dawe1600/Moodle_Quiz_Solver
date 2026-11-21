@@ -14,7 +14,8 @@ from rich.table import Table
 from rich.text import Text
 
 from moodle_quiz_solver.auto_mode import AutoModeResult, AutoStopReason
-from moodle_quiz_solver.config import AppConfig
+from moodle_quiz_solver.config import AppConfig, count_profile_materials
+from moodle_quiz_solver.domain import BackendKind, SubjectProfile
 
 _STOP_REASON_LABELS: dict[AutoStopReason, str] = {
     "finished": "Quiz zakończony ('Zapisz podejście')",
@@ -118,7 +119,7 @@ class CliRenderer:
         panel = Panel(
             grid,
             title="Moodle Quiz Solver",
-            subtitle="[Enter] Auto  |  r/reset Reset  |  h/help Pomoc  |  q/quit Wyjście",
+            subtitle="[Enter] Auto  |  p Profil  |  b Silnik  |  m Model  |  r Reset  |  h Pomoc  |  q Wyjście",
             border_style="blue",
             expand=False,
         )
@@ -130,10 +131,58 @@ class CliRenderer:
         table.add_column("Komenda", style="bold green", no_wrap=True)
         table.add_column("Działanie")
         table.add_row("[Enter]", "Uruchamia tryb AUTO na bieżącej stronie quizu")
+        table.add_row("p / profile", "Przełącza aktywny profil przedmiotu")
+        table.add_row("b / backend", "Przełącza silnik AI (agy / api) bez zamykania przeglądarki")
+        table.add_row("m / model", "Wybiera lub wpisuje model AI dla aktywnego silnika")
         table.add_row("r / reset", "Resetuje kontekst rozmowy AI i cache materiałów")
         table.add_row("h / help", "Wyświetla tę tabelę komend")
         table.add_row("q / quit", "Zamyka przeglądarkę i kończy program")
         table.add_row("ESC (w trybie AUTO)", "Natychmiast przerywa tryb AUTO")
+        self._emit(table)
+
+    def render_profile_menu(self, profiles: list[SubjectProfile], active_key: str) -> None:
+        """Render a numbered list of Subject Profiles with model and materials count."""
+        table = Table(title="Wybór profilu przedmiotu", border_style="cyan")
+        table.add_column("#", style="bold", no_wrap=True)
+        table.add_column("Profil")
+        table.add_column("Model")
+        table.add_column("Materiały", justify="right")
+        table.add_column("Status")
+        for idx, profile in enumerate(profiles, start=1):
+            status = "aktywny" if profile.key == active_key else ""
+            table.add_row(
+                str(idx),
+                f"{profile.name} ({profile.key})",
+                profile.model,
+                str(count_profile_materials(profile)),
+                status,
+            )
+        self._emit(table)
+
+    def render_backend_menu(self, active_backend: BackendKind) -> None:
+        """Render a numbered list of AI engines."""
+        table = Table(title="Wybór silnika AI", border_style="cyan")
+        table.add_column("#", style="bold", no_wrap=True)
+        table.add_column("Silnik")
+        table.add_column("Status")
+        for idx, (backend, label) in enumerate(
+            (("agy", "agy (Antigravity CLI)"), ("api", "api (Gemini API)")),
+            start=1,
+        ):
+            status = "aktywny" if backend == active_backend else ""
+            table.add_row(str(idx), label, status)
+        self._emit(table)
+
+    def render_model_menu(self, models: tuple[str, ...], active_model: str) -> None:
+        """Render a numbered list of deduplicated models plus a custom entry option."""
+        table = Table(title="Wybór modelu AI", border_style="cyan")
+        table.add_column("#", style="bold", no_wrap=True)
+        table.add_column("Model")
+        table.add_column("Status")
+        for idx, model_name in enumerate(models, start=1):
+            status = "aktywny" if model_name == active_model else ""
+            table.add_row(str(idx), model_name, status)
+        table.add_row(str(len(models) + 1), "Wpisz własną nazwę modelu", "")
         self._emit(table)
 
     def render_auto_summary(

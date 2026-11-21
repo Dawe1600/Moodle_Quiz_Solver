@@ -215,6 +215,34 @@ def load_config(
     )
 
 
+def count_profile_materials(profile: SubjectProfile) -> int:
+    """Count existing supported Reference Material files in a Subject Profile."""
+    return sum(
+        1
+        for path in profile.materials_paths
+        if path.exists() and path.is_file() and path.suffix.lower() in SUPPORTED_MATERIAL_SUFFIXES
+    )
+
+
+def collect_available_models(
+    profiles: Mapping[str, SubjectProfile],
+    active_profile_key: str,
+) -> tuple[str, ...]:
+    """Collect deduplicated primary and fallback models, starting with the active profile."""
+    ordered_profiles: list[SubjectProfile] = []
+    if active_profile_key in profiles:
+        ordered_profiles.append(profiles[active_profile_key])
+    for key, profile in profiles.items():
+        if key != active_profile_key:
+            ordered_profiles.append(profile)
+
+    models: list[str] = []
+    for profile in ordered_profiles:
+        models.append(profile.model)
+        models.extend(profile.fallback_models)
+    return tuple(dict.fromkeys(models))
+
+
 @dataclass(frozen=True, slots=True)
 class RuntimeSelection:
     """Resolved runtime choices for a solver session."""
@@ -224,14 +252,30 @@ class RuntimeSelection:
     profile: SubjectProfile
     moodle_url: str
     gemini_api_key: str | None
+    model_override: str | None = None
 
     @property
     def profile_key(self) -> str:
         return self.profile.key
 
     @property
+    def agy_model(self) -> str:
+        """Return the model name to use for the `agy` backend."""
+        return self.model_override if self.model_override is not None else self.profile.model
+
+    @property
+    def api_models(self) -> tuple[str, ...]:
+        """Return the deduplicated model fallback queue for the `api` backend."""
+        base = self.profile.fallback_models or (self.profile.model,)
+        if self.model_override is not None:
+            return tuple(dict.fromkeys((self.model_override, *base)))
+        return tuple(dict.fromkeys(base))
+
+    @property
     def active_model(self) -> str:
         """Return the primary active model name for the selected backend and profile."""
+        if self.model_override is not None:
+            return self.model_override
         if self.backend == "api" and self.profile.fallback_models:
             return self.profile.fallback_models[0]
         return self.profile.model
@@ -239,11 +283,7 @@ class RuntimeSelection:
     @property
     def available_materials_count(self) -> int:
         """Count existing supported Reference Material files in the active Subject Profile."""
-        return sum(
-            1
-            for path in self.profile.materials_paths
-            if path.exists() and path.is_file() and path.suffix.lower() in SUPPORTED_MATERIAL_SUFFIXES
-        )
+        return count_profile_materials(self.profile)
 
 
 def _is_genai_installed() -> bool:
@@ -327,3 +367,31 @@ def select_runtime(
         moodle_url=config.moodle_url,
         gemini_api_key=config.gemini_api_key,
     )
+
+
+def resolve_backend_switch(
+    target_backend: BackendKind,
+    config: AppConfig,
+    *,
+    which: Callable[[str], str | None] = shutil.which,
+    has_genai: bool | None = None,
+) -> tuple[BackendKind, str | None]:
+    """Validate availability of a target AI backend for live switching."""
+    if target_backend == "agy":
+        agy_bin = which("agy")
+        if not agy_bin:
+            raise ConfigurationError(
+                "Silnik 'agy' jest niedostępny: nie znaleziono polecenia 'agy' w PATH."
+            )
+        return "agy", agy_bin
+
+    if not config.gemini_api_key:
+        raise ConfigurationError(
+            "Silnik 'api' jest niedostępny: brak poprawnego klucza GEMINI_API_KEY."
+        )
+    genai_available = _is_genai_installed() if has_genai is None else has_genai
+    if not genai_available:
+        raise ConfigurationError(
+            "Silnik 'api' jest niedostępny: pakiet 'google-genai' nie jest zainstalowany."
+        )
+    return "api", None
