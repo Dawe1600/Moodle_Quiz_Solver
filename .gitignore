@@ -10,3 +10,5 @@ materials/
 *.pdf
 get_groq_models.py
 .herdr/
+uv.lock
+.venv/

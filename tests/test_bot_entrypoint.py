@@ -1218,3 +1218,37 @@ def test_bot_main_options_create_profile_declined_vs_confirmed(
     assert "fizyka" in saved
     assert "chemia" in saved
     assert not (tmp_path / ".env").exists()
+
+
+def test_cli_renderer_clear_runs_only_in_tty_and_status_subtitle_is_not_truncated(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from moodle_quiz_solver.cli_ui import CliRenderer, StatusSnapshot
+
+    logs: list[str] = []
+    non_tty = CliRenderer(output_fn=logs.append)
+    non_tty.clear()
+    non_tty.render_status_panel(
+        StatusSnapshot(
+            profile_name="Ogólny",
+            profile_key="ogolny",
+            backend="agy",
+            active_model="gemini-4-hydrogen-medium",
+            materials_count=0,
+            browser_status="Otwarta (Chromium)",
+            pages_solved=0,
+            questions_solved=0,
+            active_flags="domyślne",
+        )
+    )
+    rendered = "\n".join(logs)
+    assert "[Enter] Auto  |  s Krok  |  h/help Pomoc  |  q/quit Wyjście" in rendered
+
+    cleared: list[bool] = []
+    monkeypatch.setattr("sys.stdout.isatty", lambda: True)
+    tty_renderer = CliRenderer(output_fn=print)
+    assert tty_renderer._console is not None
+    monkeypatch.setattr(tty_renderer._console, "clear", lambda: cleared.append(True))
+    tty_renderer.clear()
+    assert cleared == [True]
+

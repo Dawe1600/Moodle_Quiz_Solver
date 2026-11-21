@@ -101,6 +101,11 @@ class CliRenderer:
         if text:
             self._output_fn(text)
 
+    def clear(self) -> None:
+        """Clear the terminal screen when attached to an interactive TTY."""
+        if self._is_tty and self._console is not None:
+            self._console.clear()
+
     def render_message(self, message: str) -> None:
         """Emit a plain status or informational line."""
         if self._console is not None:
@@ -133,7 +138,7 @@ class CliRenderer:
         panel = Panel(
             grid,
             title="Moodle Quiz Solver",
-            subtitle="[Enter] Auto  |  s/step Krok  |  p Profil  |  b Silnik  |  m Model  |  l/reload Przeładuj  |  o/options Opcje  |  url Adres  |  open Otwórz  |  r/reset Reset  |  h/help Pomoc  |  q/quit Wyjście",
+            subtitle="[Enter] Auto  |  s Krok  |  h/help Pomoc  |  q/quit Wyjście",
             border_style="blue",
             expand=False,
         )

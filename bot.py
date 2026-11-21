@@ -182,19 +182,23 @@ def _handle_profile_switch(
     renderer: CliRenderer,
 ) -> tuple[RuntimeSelection, Solver] | None:
     profiles = list(config.profiles.values())
+    renderer.clear()
     renderer.render_profile_menu(profiles, selection.profile.key)
     raw = input_fn(f"Wybierz profil [1-{len(profiles)}, 0/Enter=Anuluj]: ")
     if _is_cancel_input(raw):
+        renderer.clear()
         return None
 
     idx = _parse_menu_index(raw, len(profiles))
     if idx is None:
+        renderer.clear()
         renderer.render_message("Nieprawidłowy wybór profilu.")
         return None
 
     chosen = profiles[idx - 1]
     new_selection = replace(selection, profile=chosen, model_override=None)
     new_solver = _rebuild_solver(new_selection, cancellation)
+    renderer.clear()
     renderer.render_message(f"Przełączono profil na: {chosen.name} ({chosen.key}).")
     return new_selection, new_solver
 
@@ -207,9 +211,11 @@ def _handle_backend_switch(
     input_fn: Callable[[str], str],
     renderer: CliRenderer,
 ) -> tuple[RuntimeSelection, Solver] | None:
+    renderer.clear()
     renderer.render_backend_menu(selection.backend)
     raw = input_fn("Wybierz silnik AI [1-2, 0/Enter=Anuluj]: ")
     if _is_cancel_input(raw):
+        renderer.clear()
         return None
 
     normalized = raw.strip().lower()
@@ -219,10 +225,12 @@ def _handle_backend_switch(
     elif normalized in ("2", "api"):
         target = "api"
     else:
+        renderer.clear()
         renderer.render_message("Nieprawidłowy wybór silnika AI.")
         return None
 
     if target == selection.backend:
+        renderer.clear()
         renderer.render_message(f"Silnik '{target}' jest już aktywny.")
         return None
 
@@ -237,9 +245,11 @@ def _handle_backend_switch(
         )
         new_solver = _rebuild_solver(new_selection, cancellation)
     except ConfigurationError as exc:
+        renderer.clear()
         renderer.render_message(f"BŁĄD: {exc}")
         return None
 
+    renderer.clear()
     renderer.render_message(f"Przełączono silnik AI na: {resolved_backend}.")
     return new_selection, new_solver
 
@@ -254,19 +264,23 @@ def _handle_model_switch(
 ) -> tuple[RuntimeSelection, Solver] | None:
     models = collect_available_models(config.profiles, selection.profile.key)
     custom_option = len(models) + 1
+    renderer.clear()
     renderer.render_model_menu(models, selection.active_model)
     raw = input_fn(f"Wybierz model [1-{custom_option}, 0/Enter=Anuluj]: ")
     if _is_cancel_input(raw):
+        renderer.clear()
         return None
 
     idx = _parse_menu_index(raw, custom_option)
     if idx is None:
+        renderer.clear()
         renderer.render_message("Nieprawidłowy wybór modelu.")
         return None
 
     if idx == custom_option:
         custom_raw = input_fn("Podaj własną nazwę modelu (Enter=Anuluj): ")
         if _is_cancel_input(custom_raw):
+            renderer.clear()
             return None
         chosen_model = custom_raw.strip()
     else:
@@ -274,6 +288,7 @@ def _handle_model_switch(
 
     new_selection = replace(selection, model_override=chosen_model)
     new_solver = _rebuild_solver(new_selection, cancellation)
+    renderer.clear()
     renderer.render_message(f"Zmieniono model AI na: {chosen_model}.")
     return new_selection, new_solver
 
@@ -300,6 +315,7 @@ def _handle_reload_profiles(
     try:
         reloaded_profiles = _load_profiles()
     except ConfigurationError as exc:
+        renderer.clear()
         renderer.render_message(
             f"BŁĄD: Nie udało się przeładować profili ({exc}). Zachowano poprzednią konfigurację."
         )
@@ -320,6 +336,7 @@ def _handle_reload_profiles(
 
     new_selection = replace(selection, profile=next_profile, model_override=None)
     new_solver = _rebuild_solver(new_selection, cancellation)
+    renderer.clear()
     renderer.render_message(status_note)
     return new_config, new_selection, new_solver
 
@@ -379,11 +396,13 @@ def _edit_active_profile(
     input_fn: Callable[[str], str],
     renderer: CliRenderer,
 ) -> tuple[AppConfig, RuntimeSelection, Solver]:
+    renderer.clear()
     while True:
         profile = selection.profile
         renderer.render_profile_edit_menu(profile)
         choice = input_fn("Wybierz pole do edycji [1-4, 0/Enter=Powrót]: ").strip().lower()
         if choice in ("", "0", "b", "back", "q"):
+            renderer.clear()
             return config, selection, _rebuild_solver(selection, cancellation)
 
         updated: SubjectProfile | None = None
@@ -401,11 +420,13 @@ def _edit_active_profile(
             if not _is_cancel_input(raw_path):
                 candidate = Path(raw_path)
                 if candidate in profile.materials_paths:
+                    renderer.clear()
                     renderer.render_message("Ta ścieżka jest już przypisana do profilu.")
                     continue
                 updated = replace(profile, materials_paths=(*profile.materials_paths, candidate))
         elif choice == "3":
             if not profile.materials_paths:
+                renderer.clear()
                 renderer.render_message("Profil nie ma przypisanych ścieżek materiałów.")
                 continue
             for idx, mat_path in enumerate(profile.materials_paths, start=1):
@@ -416,6 +437,7 @@ def _edit_active_profile(
             if not _is_cancel_input(raw_idx):
                 chosen_idx = _parse_menu_index(raw_idx, len(profile.materials_paths))
                 if chosen_idx is None:
+                    renderer.clear()
                     renderer.render_message("Nieprawidłowy wybór ścieżki.")
                     continue
                 remaining = tuple(
@@ -427,6 +449,7 @@ def _edit_active_profile(
             if not _is_cancel_input(new_prompt):
                 updated = replace(profile, system_prompt=new_prompt)
         else:
+            renderer.clear()
             renderer.render_message(f"Nieprawidłowa opcja: '{choice}'. Wybierz 1-4 lub 0.")
             continue
 
@@ -441,6 +464,7 @@ def _edit_active_profile(
                 input_fn=input_fn,
                 renderer=renderer,
             )
+            renderer.clear()
 
 
 def _create_new_profile(
@@ -515,6 +539,7 @@ def _run_options_menu(
     solver: Solver,
     cancellation: Cancellation,
 ) -> tuple[bool, bool, AppConfig, RuntimeSelection, Solver]:
+    renderer.clear()
     while True:
         renderer.render_options_menu(
             confirm_before_next=confirm_before_next,
@@ -523,15 +548,18 @@ def _run_options_menu(
         )
         choice = input_fn("Wybierz opcję [1-4, 0/Enter=Powrót]: ").strip().lower()
         if choice in ("", "0", "b", "back", "q"):
+            renderer.clear()
             return confirm_before_next, show_reasoning, config, selection, solver
         if choice == "1":
             confirm_before_next = not confirm_before_next
+            renderer.clear()
             renderer.render_message(
                 f"Ustawiono confirm_before_next: {format_toggle_label(confirm_before_next)}"
             )
             continue
         if choice == "2":
             show_reasoning = not show_reasoning
+            renderer.clear()
             renderer.render_message(
                 f"Ustawiono show_reasoning: {format_toggle_label(show_reasoning)}"
             )
@@ -545,9 +573,11 @@ def _run_options_menu(
             created = _create_new_profile(
                 config, selection, cancellation, input_fn=input_fn, renderer=renderer
             )
+            renderer.clear()
             if created is not None:
                 config, selection, solver = created
             continue
+        renderer.clear()
         renderer.render_message(f"Nieprawidłowa opcja: '{choice}'. Wybierz 1-4 lub 0.")
 
 
@@ -582,6 +612,7 @@ def main(
         opener=open_quiz_page,
         renderer=renderer,
     )
+    renderer.clear()
     if browser.open():
         renderer.render_message("Zaloguj się i wejdź do quizu.")
 
@@ -620,6 +651,7 @@ def main(
                 continue
             if cmd in ("r", "reset"):
                 solver.reset_session()
+                renderer.clear()
                 renderer.render_message("Zresetowano sesję kontekstu AI.")
                 continue
             if cmd in ("l", "reload"):
@@ -630,6 +662,7 @@ def main(
                     config, selection, solver = reloaded
                 continue
             if cmd in ("h", "help"):
+                renderer.clear()
                 renderer.render_help_table()
                 continue
             if cmd in ("o", "options"):
@@ -651,6 +684,7 @@ def main(
                 )
                 continue
             if cmd == "open" and len(parts) == 1:
+                renderer.clear()
                 if browser.is_open():
                     renderer.render_message("Przeglądarka jest już otwarta.")
                 elif browser.open():
@@ -667,22 +701,26 @@ def main(
                     if len(parts) == 2
                     else input_fn("Podaj nowy adres URL Moodle: ").strip()
                 )
+                renderer.clear()
                 if not new_url:
                     renderer.render_message("Adres URL nie może być pusty.")
                     continue
                 browser.navigate(new_url)
                 continue
             if cmd not in ("", "s", "step"):
+                renderer.clear()
                 renderer.render_unknown_command(stripped)
                 continue
 
             active_page = browser.page
             if active_page is None:
+                renderer.clear()
                 renderer.render_message(
                     "Przeglądarka jest zamknięta. Użyj 'open' lub 'url', aby ją otworzyć."
                 )
                 continue
 
+            renderer.clear()
             cancellation.reset()
             is_step = cmd in ("s", "step")
             try:
