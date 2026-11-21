@@ -19,6 +19,8 @@ AutoStopReason = Literal[
     "cancelled",
     "solver_error",
     "page_error",
+    "max_pages",
+    "advance_declined",
 ]
 
 
@@ -54,6 +56,9 @@ def run_auto_mode(
     *,
     output_fn: Callable[[str], None] = print,
     status_fn: Callable[[str], AbstractContextManager[None]] | None = None,
+    max_pages: int | None = None,
+    before_advance: Callable[[], bool] | None = None,
+    show_reasoning: bool = True,
 ) -> AutoModeResult:
     """Run Auto Mode until quiz completion, missing navigation, error, or cancellation."""
     pages_completed = 0
@@ -85,13 +90,31 @@ def run_auto_mode(
                     output_fn(f"\n--- Pytanie {idx}/{total} ---")
                     with status_ctx(f"Rozwiązuję pytanie {idx}/{total}... (ESC przerywa)"):
                         answer = solver.solve(question)
-                    if answer.reasoning:
+                    if show_reasoning and answer.reasoning:
                         output_fn(f"Uzasadnienie AI: {answer.reasoning}")
                     cancellation.raise_if_cancelled()
                     quiz_page.apply_answer(question, answer)
                     questions_answered += 1
 
                 cancellation.raise_if_cancelled()
+                if max_pages is not None and pages_completed + 1 >= max_pages:
+                    pages_completed += 1
+                    output_fn("Zakończono bieżącą stronę bez przejścia dalej.")
+                    return AutoModeResult(
+                        stop_reason="max_pages",
+                        pages_completed=pages_completed,
+                        questions_answered=questions_answered,
+                    )
+
+                if before_advance is not None and not before_advance():
+                    pages_completed += 1
+                    output_fn("Zatrzymano tryb AUTO przed przejściem do następnej strony.")
+                    return AutoModeResult(
+                        stop_reason="advance_declined",
+                        pages_completed=pages_completed,
+                        questions_answered=questions_answered,
+                    )
+
                 outcome = quiz_page.advance()
                 if outcome == "next":
                     pages_completed += 1

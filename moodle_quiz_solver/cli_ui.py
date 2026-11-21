@@ -24,6 +24,8 @@ _STOP_REASON_LABELS: dict[AutoStopReason, str] = {
     "cancelled": "Przerwano przez użytkownika (ESC)",
     "solver_error": "Błąd solvera AI",
     "page_error": "Błąd strony quizu",
+    "max_pages": "Zakończono bieżącą stronę (tryb krokowy)",
+    "advance_declined": "Zatrzymano przed przejściem do następnej strony",
 }
 
 
@@ -40,6 +42,13 @@ class StatusSnapshot:
     pages_solved: int
     questions_solved: int
     active_flags: str
+    confirm_before_next: bool = False
+    show_reasoning: bool = True
+
+
+def format_toggle_label(enabled: bool) -> str:
+    """Format a boolean session toggle as a concise Polish ON/OFF label."""
+    return "WŁ." if enabled else "WYŁ."
 
 
 def format_active_flags(config: AppConfig) -> str:
@@ -114,12 +123,17 @@ class CliRenderer:
             "Sesja:",
             f"Strony: {status.pages_solved}  |  Pytania: {status.questions_solved}",
         )
+        grid.add_row(
+            "Opcje:",
+            f"Potwierdzaj przejście: {format_toggle_label(status.confirm_before_next)}  |  "
+            f"Uzasadnienia AI: {format_toggle_label(status.show_reasoning)}",
+        )
         grid.add_row("Flagi CLI:", status.active_flags)
 
         panel = Panel(
             grid,
             title="Moodle Quiz Solver",
-            subtitle="[Enter] Auto  |  p Profil  |  b Silnik  |  m Model  |  r Reset  |  h Pomoc  |  q Wyjście",
+            subtitle="[Enter] Auto  |  s/step Krok  |  p Profil  |  b Silnik  |  m Model  |  o/options Opcje  |  r/reset Reset  |  h/help Pomoc  |  q/quit Wyjście",
             border_style="blue",
             expand=False,
         )
@@ -131,9 +145,11 @@ class CliRenderer:
         table.add_column("Komenda", style="bold green", no_wrap=True)
         table.add_column("Działanie")
         table.add_row("[Enter]", "Uruchamia tryb AUTO na bieżącej stronie quizu")
+        table.add_row("s / step", "Rozwiązuje tylko bieżącą stronę quizu bez przejścia dalej")
         table.add_row("p / profile", "Przełącza aktywny profil przedmiotu")
         table.add_row("b / backend", "Przełącza silnik AI (agy / api) bez zamykania przeglądarki")
         table.add_row("m / model", "Wybiera lub wpisuje model AI dla aktywnego silnika")
+        table.add_row("o / options", "Otwiera menu opcji sesji")
         table.add_row("r / reset", "Resetuje kontekst rozmowy AI i cache materiałów")
         table.add_row("h / help", "Wyświetla tę tabelę komend")
         table.add_row("q / quit", "Zamyka przeglądarkę i kończy program")
@@ -207,3 +223,27 @@ class CliRenderer:
         self.render_message(
             f"Nieznana komenda: '{raw_cmd}'. Wpisz 'h' lub 'help', aby zobaczyć listę komend."
         )
+
+    def render_options_menu(
+        self,
+        *,
+        confirm_before_next: bool,
+        show_reasoning: bool,
+    ) -> None:
+        """Render the numbered session options submenu."""
+        table = Table(title="Opcje sesji", border_style="cyan")
+        table.add_column("#", style="bold green", no_wrap=True)
+        table.add_column("Ustawienie")
+        table.add_column("Stan", style="bold")
+        table.add_row(
+            "1",
+            "Potwierdzaj przed przejściem dalej (confirm_before_next)",
+            format_toggle_label(confirm_before_next),
+        )
+        table.add_row(
+            "2",
+            "Wyświetlaj uzasadnienie AI (show_reasoning)",
+            format_toggle_label(show_reasoning),
+        )
+        table.add_row("0", "Powrót do menu głównego", "")
+        self._emit(table)

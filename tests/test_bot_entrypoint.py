@@ -245,6 +245,7 @@ def test_bot_main_disables_tty_spinner_when_using_custom_output_fn(
         *,
         output_fn: object = print,
         status_fn: object = None,
+        **kwargs: object,
     ) -> object:
         from moodle_quiz_solver.auto_mode import AutoModeResult
 
@@ -577,3 +578,143 @@ def test_bot_main_model_switching_for_agy_and_api_and_cancel(
         ("m-custom", "m-fb1", "m-fb2"),
         ("m-fb2", "m-fb1"),
     ]
+
+
+class _FakeStepQuizPage:
+    def __init__(self, questions: list[Question] | None = None) -> None:
+        self._questions = questions or [
+            Question(index=0, prompt="Q?", question_type="radio", options=("A", "B"))
+        ]
+        self.applied: list[tuple[Question, Answer]] = []
+        self.advance_calls = 0
+
+    def extract_questions(self) -> list[Question]:
+        return list(self._questions)
+
+    def apply_answer(self, question: Question, answer: Answer) -> None:
+        self.applied.append((question, answer))
+
+    def advance(self) -> NavigationOutcome:
+        self.advance_calls += 1
+        return "next"
+
+
+def _patch_fake_cli(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    *,
+    responses: list[str],
+    questions: list[Question] | None = None,
+) -> _FakeStepQuizPage:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("shutil.which", lambda name: "/usr/bin/agy" if name == "agy" else None)
+    fake_page = _FakeStepQuizPage(questions)
+    response_iter = iter(responses)
+
+    @contextmanager
+    def _fake_open_quiz_page(start_url: str | None = None) -> Iterator[_FakeStepQuizPage]:
+        yield fake_page
+
+    class _FakeAgyTransport:
+        def __init__(self, *, agy_bin: str, model: str, cancellation: object) -> None:
+            pass
+
+        def generate(self, request: object) -> str:
+            return next(response_iter)
+
+        def reset_session(self) -> None:
+            pass
+
+    monkeypatch.setattr(bot, "open_quiz_page", _fake_open_quiz_page)
+    monkeypatch.setattr(bot, "AgyTransport", _FakeAgyTransport)
+    return fake_page
+
+
+def test_bot_main_step_mode_solves_current_page_without_advancing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_page = _patch_fake_cli(
+        monkeypatch,
+        tmp_path,
+        questions=[
+            Question(index=0, prompt="P1?", question_type="radio", options=("A", "B")),
+            Question(index=1, prompt="P2?", question_type="text"),
+        ],
+        responses=[
+            '{"answer_type": "radio", "selected_indices": [0], "reasoning": "Reason 1"}',
+            '{"answer_type": "text", "text_answers": ["ok"], "reasoning": "Reason 2"}',
+        ],
+    )
+
+    commands = iter(["s", "q"])
+    logs: list[str] = []
+    exit_code = bot.main([], input_fn=lambda _prompt: next(commands), output_fn=logs.append)
+
+    joined = "\n".join(logs)
+    assert exit_code == 0
+    assert fake_page.advance_calls == 0
+    assert len(fake_page.applied) == 2
+    assert "Strony: 1" in joined
+    assert "Pytania: 2" in joined
+    assert "Uzasadnienie AI: Reason 1" in joined
+
+
+def test_bot_main_options_submenu_toggles_settings_and_suppresses_reasoning(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_page = _patch_fake_cli(
+        monkeypatch,
+        tmp_path,
+        responses=[
+            '{"answer_type": "radio", "selected_indices": [0], "reasoning": "Visible reasoning"}',
+            '{"answer_type": "radio", "selected_indices": [1], "reasoning": "Hidden step reasoning"}',
+            '{"answer_type": "radio", "selected_indices": [0], "reasoning": "Hidden auto reasoning"}',
+        ],
+    )
+
+    # step -> options (toggle confirm_before_next=ON, show_reasoning=OFF, back) -> step -> auto (decline) -> quit
+    commands = iter(["step", "o", "1", "2", "0", "s", "", "n", "q"])
+    logs: list[str] = []
+    exit_code = bot.main([], input_fn=lambda _prompt: next(commands), output_fn=logs.append)
+
+    joined = "\n".join(logs)
+    assert exit_code == 0
+    assert "Visible reasoning" in joined
+    assert "Hidden step reasoning" not in joined
+    assert "Hidden auto reasoning" not in joined
+    assert fake_page.advance_calls == 0
+    assert len(fake_page.applied) == 3
+    assert "Strony: 3" in joined
+    assert "Pytania: 3" in joined
+    assert "confirm_before_next" in joined
+    assert "show_reasoning" in joined
+    assert "Potwierdzaj przejście: WŁ." in joined
+    assert "Uzasadnienia AI: WYŁ." in joined
+
+
+def test_bot_main_confirm_before_next_accepts_then_declines_advancement(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_page = _patch_fake_cli(
+        monkeypatch,
+        tmp_path,
+        responses=[
+            '{"answer_type": "radio", "selected_indices": [0], "reasoning": "ok"}',
+            '{"answer_type": "radio", "selected_indices": [0], "reasoning": "ok"}',
+        ],
+    )
+
+    # Enable confirm_before_next via options, run auto mode: accept page 1 ("t"), decline page 2 ("n"), quit
+    commands = iter(["options", "1", "", "", "t", "n", "q"])
+    logs: list[str] = []
+    exit_code = bot.main([], input_fn=lambda _prompt: next(commands), output_fn=logs.append)
+
+    joined = "\n".join(logs)
+    assert exit_code == 0
+    assert fake_page.advance_calls == 1
+    assert len(fake_page.applied) == 2
+    assert "Strony: 2" in joined
+    assert "Pytania: 2" in joined
