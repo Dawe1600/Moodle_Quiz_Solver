@@ -8,6 +8,7 @@ from typing import Literal
 
 BackendKind = Literal["agy", "api"]
 AnswerType = Literal["radio", "checkbox", "text", "select"]
+SUPPORTED_MATERIAL_SUFFIXES: tuple[str, ...] = (".pdf", ".md", ".txt")
 
 
 @dataclass(frozen=True, slots=True)

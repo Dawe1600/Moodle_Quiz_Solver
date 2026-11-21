@@ -74,8 +74,8 @@ Plik `profiles.json` jest ignorowany przez Gita (`.gitignore`), żeby Twoje loka
 
 ## 3. Konfiguracja silnika AI
 
-- **Opcja A: `agy CLI` (domyślna, z subskrypcji):** Jeśli masz zainstalowane i zalogowane `agy` w systemowym `PATH`, nic więcej nie musisz konfigurować.
-- **Opcja B: Google AI Studio API (opcjonalny fallback):** Skopiuj `.env.example` do `.env` i wpisz swój klucz `GEMINI_API_KEY`. Jeśli masz oba, przy starcie wybierzesz silnik w menu (`[1]` agy CLI / `[2]` API).
+- **Opcja A: `agy CLI` (domyślna, z subskrypcji):** Jeśli masz zainstalowane i zalogowane `agy` w systemowym `PATH`, silnik zostanie wybrany automatycznie przy starcie bez dodatkowych pytań.
+- **Opcja B: Google AI Studio API (opcjonalny fallback):** Skopiuj `.env.example` do `.env` i wpisz swój klucz `GEMINI_API_KEY`. Jeśli `agy` nie jest dostępne w `PATH` (lub wymusisz `--backend api`), bot automatycznie użyje API.
 
 ---
 
@@ -92,13 +92,14 @@ Plik `profiles.json` jest ignorowany przez Gita (`.gitignore`), żeby Twoje loka
      source venv/bin/activate
      python bot.py
      ```
-2. Wybierz silnik AI (jeśli masz oba) oraz numer profilu przedmiotu.
+2. Bot automatycznie wybierze domyślny silnik AI (`agy` przed `api`) oraz pierwszy profil z `profiles.json` i od razu uruchomi przeglądarkę Chromium, wyświetlając w terminalu panel statusu (`rich`).
 3. W otwartym oknie Chromium zaloguj się na Moodle i przejdź na pierwszą stronę wybranego quizu.
 4. Sterowanie w terminalu:
    - **`Enter`**: Włącza tryb `AUTO` (bot rozwiązuje pytania na stronie i sam klika `Następna strona` aż do ekranu `Zapisz podejście`).
    - **`ESC`**: Natychmiast przerywa tryb `AUTO` (działa również w trakcie oczekiwania na odpowiedź modelu).
-   - **`r`**: Resetuje pamięć rozmowy (`conversation_id` oraz cache materiałów) przed rozpoczęciem kolejnego quizu.
-   - **`q`**: Zamyka bota.
+   - **`r`** / **`reset`**: Resetuje pamięć rozmowy (`conversation_id` oraz cache materiałów) przed rozpoczęciem kolejnego quizu.
+   - **`h`** / **`help`**: Wyświetla tabelę dostępnych komend.
+   - **`q`** / **`quit`**: Zamyka bota.
 
 ### Opcjonalne flagi CLI
 

@@ -249,26 +249,50 @@ def test_select_runtime_uses_cli_profile_and_backend_without_prompts(tmp_path: P
     assert selection.gemini_api_key == "AIzaRealKey"
 
 
-def test_select_runtime_interactive_menu_when_both_backends_available(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("agy_path", "expected_backend", "expected_agy_bin"),
+    [
+        ("C:\\bin\\agy.exe", "agy", "C:\\bin\\agy.exe"),
+        (None, "api", None),
+    ],
+)
+def test_select_runtime_resolves_default_backend_and_first_profile_without_prompts(
+    tmp_path: Path,
+    agy_path: str | None,
+    expected_backend: str,
+    expected_agy_bin: str | None,
+) -> None:
+    profiles_file = tmp_path / "profiles.json"
+    profiles_file.write_text(
+        json.dumps(
+            {
+                "first": {"name": "Pierwszy", "model": "m1", "system_prompt": "s1"},
+                "second": {"name": "Drugi", "model": "m2", "system_prompt": "s2"},
+            }
+        ),
+        encoding="utf-8",
+    )
     config = load_config(
-        profiles_path=tmp_path / "missing.json",
+        profiles_path=profiles_file,
         env_path=tmp_path / ".env",
         env={"GEMINI_API_KEY": "AIzaRealKey"},
         cli_args=[],
     )
-    answers = iter(["2", ""])
+
+    def fail_input(_: str) -> str:
+        raise AssertionError("input_fn should not be called during automatic runtime selection")
 
     selection = select_runtime(
         config,
-        which=lambda name: "C:\\bin\\agy.exe" if name == "agy" else None,
+        which=lambda name: agy_path if name == "agy" else None,
         has_genai=True,
-        input_fn=lambda _: next(answers),
+        input_fn=fail_input,
         output_fn=lambda _: None,
     )
 
-    assert selection.backend == "api"
-    assert selection.agy_bin is None
-    assert selection.profile_key == "ogolny"
+    assert selection.backend == expected_backend
+    assert selection.agy_bin == expected_agy_bin
+    assert selection.profile_key == "first"
 
 
 def test_select_runtime_autodetects_single_available_backend(tmp_path: Path) -> None:

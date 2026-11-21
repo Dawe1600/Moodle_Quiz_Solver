@@ -7,6 +7,7 @@ dependencies = [
     "playwright",
     "python-dotenv",
     "google-genai",
+    "rich",
 ]
 
 [project.optional-dependencies]

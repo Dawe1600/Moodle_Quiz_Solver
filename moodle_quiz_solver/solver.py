@@ -15,6 +15,7 @@ from typing import Any, Protocol, TypeVar, cast
 
 from moodle_quiz_solver.cancellation import Cancellation
 from moodle_quiz_solver.domain import (
+    SUPPORTED_MATERIAL_SUFFIXES,
     Answer,
     AnswerType,
     Question,
@@ -209,9 +210,11 @@ class Solver:
             if not path.exists() or not path.is_file():
                 continue
             suffix = path.suffix.lower()
+            if suffix not in SUPPORTED_MATERIAL_SUFFIXES:
+                continue
             if suffix == ".pdf":
                 loaded.append(ReferenceMaterial(path=path, raw_bytes=path.read_bytes()))
-            elif suffix in (".md", ".txt"):
+            else:
                 loaded.append(
                     ReferenceMaterial(path=path, content=path.read_text(encoding="utf-8"))
                 )

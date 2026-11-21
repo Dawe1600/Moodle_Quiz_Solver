@@ -14,7 +14,11 @@ from typing import Any, NoReturn, cast
 
 from dotenv import dotenv_values
 
-from moodle_quiz_solver.domain import BackendKind, SubjectProfile
+from moodle_quiz_solver.domain import (
+    SUPPORTED_MATERIAL_SUFFIXES,
+    BackendKind,
+    SubjectProfile,
+)
 from moodle_quiz_solver.exceptions import ConfigurationError
 
 DEFAULT_MOODLE_URL = "https://moodle2.e-wsb.pl/login/index.php"
@@ -56,6 +60,7 @@ class AppConfig:
     moodle_url: str
     cli_profile: str | None = None
     cli_backend: BackendKind | None = None
+    cli_url: str | None = None
 
 
 class _ConfigArgumentParser(argparse.ArgumentParser):
@@ -206,6 +211,7 @@ def load_config(
         moodle_url=moodle_url,
         cli_profile=cli.profile,
         cli_backend=cli.backend,
+        cli_url=cli.url.strip() if cli.url is not None else None,
     )
 
 
@@ -223,6 +229,22 @@ class RuntimeSelection:
     def profile_key(self) -> str:
         return self.profile.key
 
+    @property
+    def active_model(self) -> str:
+        """Return the primary active model name for the selected backend and profile."""
+        if self.backend == "api" and self.profile.fallback_models:
+            return self.profile.fallback_models[0]
+        return self.profile.model
+
+    @property
+    def available_materials_count(self) -> int:
+        """Count existing supported Reference Material files in the active Subject Profile."""
+        return sum(
+            1
+            for path in self.profile.materials_paths
+            if path.exists() and path.is_file() and path.suffix.lower() in SUPPORTED_MATERIAL_SUFFIXES
+        )
+
 
 def _is_genai_installed() -> bool:
     return importlib.util.find_spec("google.genai") is not None
@@ -232,8 +254,6 @@ def _select_backend(
     config: AppConfig,
     agy_bin: str | None,
     genai_available: bool,
-    input_fn: Callable[[str], str],
-    output_fn: Callable[[str], None],
 ) -> tuple[BackendKind, str | None]:
     has_api = bool(config.gemini_api_key and genai_available)
 
@@ -255,21 +275,10 @@ def _select_backend(
             )
         return "api", None
 
-    if agy_bin and has_api:
-        output_fn("\n=== Wybierz silnik AI ===")
-        output_fn("  [1] agy CLI (subskrypcja Antigravity - domyślny)")
-        output_fn("  [2] Google AI Studio API (GEMINI_API_KEY z .env)")
-        choice = input_fn("Wybór [1/2] (Enter = 1): ").strip()
-        if choice == "2":
-            return "api", None
-        return "agy", agy_bin
-
     if agy_bin:
-        output_fn(f"\nSilnik AI: agy CLI ({agy_bin})")
         return "agy", agy_bin
 
     if has_api:
-        output_fn("\nSilnik AI: Google AI Studio API (fallback, nie znaleziono agy w PATH)")
         return "api", None
 
     raise ConfigurationError(
@@ -277,11 +286,7 @@ def _select_backend(
     )
 
 
-def _select_profile(
-    config: AppConfig,
-    input_fn: Callable[[str], str],
-    output_fn: Callable[[str], None],
-) -> SubjectProfile:
+def _select_profile(config: AppConfig) -> SubjectProfile:
     if config.cli_profile is not None:
         profile = config.profiles.get(config.cli_profile)
         if profile is None:
@@ -291,21 +296,7 @@ def _select_profile(
             )
         return profile
 
-    keys = list(config.profiles.keys())
-    output_fn("\n=== Wybierz profil przedmiotu ===")
-    for idx, key in enumerate(keys, 1):
-        prof = config.profiles[key]
-        mats = [p.name for p in prof.materials_paths if p.exists()]
-        mats_info = f" | Materiały: {', '.join(mats)}" if mats else ""
-        output_fn(f"  [{idx}] {prof.name} (model: {prof.model}){mats_info}")
-
-    while True:
-        choice = input_fn(f"\nWybierz numer [1-{len(keys)}] (Enter = 1): ").strip()
-        if not choice:
-            return config.profiles[keys[0]]
-        if choice.isdigit() and 1 <= int(choice) <= len(keys):
-            return config.profiles[keys[int(choice) - 1]]
-        output_fn("Nieprawidłowy wybór, spróbuj ponownie.")
+    return next(iter(config.profiles.values()))
 
 
 def select_runtime(
@@ -317,6 +308,7 @@ def select_runtime(
     output_fn: Callable[[str], None] = print,
 ) -> RuntimeSelection:
     """Resolve the active AI backend and Subject Profile from config and environment."""
+    del input_fn, output_fn
     if config.cli_profile is not None and config.cli_profile not in config.profiles:
         available = ", ".join(config.profiles.keys())
         raise ConfigurationError(
@@ -325,10 +317,8 @@ def select_runtime(
 
     agy_bin = which("agy")
     genai_available = _is_genai_installed() if has_genai is None else has_genai
-    backend, resolved_agy_bin = _select_backend(
-        config, agy_bin, genai_available, input_fn, output_fn
-    )
-    profile = _select_profile(config, input_fn, output_fn)
+    backend, resolved_agy_bin = _select_backend(config, agy_bin, genai_available)
+    profile = _select_profile(config)
 
     return RuntimeSelection(
         backend=backend,

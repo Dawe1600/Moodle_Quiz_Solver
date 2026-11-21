@@ -237,3 +237,40 @@ def test_run_auto_mode_stops_without_advancing_when_no_questions_found() -> None
     )
     assert quiz_page.advance_calls == 0
 
+
+def test_run_auto_mode_invokes_status_fn_for_page_and_questions() -> None:
+    q1 = Question(index=0, prompt="Q1?", question_type="radio", options=("A", "B"))
+    q2 = Question(index=1, prompt="Q2?", question_type="radio", options=("C", "D"))
+    quiz_page = _FakeQuizPage(pages=[[q1, q2]], outcomes=["finished"])
+    transport = _FakeTransport(
+        [
+            '{"answer_type": "radio", "selected_indices": [0], "reasoning": "A"}',
+            '{"answer_type": "radio", "selected_indices": [1], "reasoning": "D"}',
+        ]
+    )
+    cancellation = _RecordingCancellation()
+    solver = Solver(profile=_profile(), transport=transport, cancellation=cancellation)
+    status_messages: list[str] = []
+    logs: list[str] = []
+
+    @contextmanager
+    def _record_status(message: str) -> Iterator[None]:
+        status_messages.append(message)
+        yield
+
+    result = run_auto_mode(
+        quiz_page,
+        solver,
+        cancellation,
+        output_fn=logs.append,
+        status_fn=_record_status,
+    )
+
+    assert result.stop_reason == "finished"
+    assert any("Pytanie 1/2" in line for line in logs)
+    assert any("Pytanie 2/2" in line for line in logs)
+    assert len(status_messages) == 3
+    assert "ESC" in status_messages[0]
+    assert "1/2" in status_messages[1] and "ESC" in status_messages[1]
+    assert "2/2" in status_messages[2] and "ESC" in status_messages[2]
+

@@ -7,6 +7,11 @@ from collections.abc import Callable, Sequence
 
 from moodle_quiz_solver.auto_mode import run_auto_mode
 from moodle_quiz_solver.cancellation import Cancellation, TerminalCancellation
+from moodle_quiz_solver.cli_ui import (
+    CliRenderer,
+    StatusSnapshot,
+    format_active_flags,
+)
 from moodle_quiz_solver.config import RuntimeSelection, load_config, select_runtime
 from moodle_quiz_solver.exceptions import ConfigurationError
 from moodle_quiz_solver.quiz_page import open_quiz_page
@@ -54,28 +59,60 @@ def main(
         output_fn(f"BŁĄD: {exc}")
         return 1
 
-    output_fn(f"\nWybrano profil: {selection.profile.name}")
+    renderer = CliRenderer(output_fn=output_fn)
     solver = Solver(profile=selection.profile, transport=transport, cancellation=cancellation)
+    materials_count = selection.available_materials_count
+    active_model = selection.active_model
+    active_flags = format_active_flags(config)
+    session_pages = 0
+    session_questions = 0
 
     with open_quiz_page(selection.moodle_url) as quiz_page:
-        output_fn("Zaloguj się i wejdź do quizu.")
+        renderer.render_message("Zaloguj się i wejdź do quizu.")
         while True:
-            cmd = (
-                input_fn(
-                    "\nWciśnij [Enter] aby włączyć tryb AUTO, "
-                    "'r' aby zresetować kontekst rozmowy, lub 'q' aby wyjść: "
+            renderer.render_status_panel(
+                StatusSnapshot(
+                    profile_name=selection.profile.name,
+                    profile_key=selection.profile.key,
+                    backend=selection.backend,
+                    active_model=active_model,
+                    materials_count=materials_count,
+                    browser_status="Otwarta (Chromium)",
+                    pages_solved=session_pages,
+                    questions_solved=session_questions,
+                    active_flags=active_flags,
                 )
-                .strip()
-                .lower()
             )
-            if cmd == "q":
+            raw_cmd = input_fn("Polecenie [Enter=Auto, r=Reset, h=Pomoc, q=Wyjście]: ")
+            cmd = raw_cmd.strip().lower()
+            if cmd in ("q", "quit"):
                 break
-            if cmd == "r":
+            if cmd in ("r", "reset"):
                 solver.reset_session()
-                output_fn("Zresetowano sesję kontekstu AI.")
+                renderer.render_message("Zresetowano sesję kontekstu AI.")
                 continue
+            if cmd in ("h", "help"):
+                renderer.render_help_table()
+                continue
+            if cmd != "":
+                renderer.render_unknown_command(raw_cmd.strip())
+                continue
+
             cancellation.reset()
-            run_auto_mode(quiz_page, solver, cancellation, output_fn=output_fn)
+            result = run_auto_mode(
+                quiz_page,
+                solver,
+                cancellation,
+                output_fn=renderer.render_message,
+                status_fn=renderer.status_factory,
+            )
+            session_pages += result.pages_completed
+            session_questions += result.questions_answered
+            renderer.render_auto_summary(
+                result,
+                total_pages=session_pages,
+                total_questions=session_questions,
+            )
 
     return 0
 

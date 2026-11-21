@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
 from typing import Literal
 
@@ -52,10 +53,14 @@ def run_auto_mode(
     cancellation: Cancellation,
     *,
     output_fn: Callable[[str], None] = print,
+    status_fn: Callable[[str], AbstractContextManager[None]] | None = None,
 ) -> AutoModeResult:
     """Run Auto Mode until quiz completion, missing navigation, error, or cancellation."""
     pages_completed = 0
     questions_answered = 0
+    status_ctx: Callable[[str], AbstractContextManager[None]] = (
+        status_fn if status_fn is not None else lambda _msg: nullcontext()
+    )
 
     with cancellation.armed():
         try:
@@ -64,7 +69,8 @@ def run_auto_mode(
                 output_fn(
                     "Analizuję stronę... (wciśnij ESC w terminalu, aby natychmiast przerwać!)"
                 )
-                questions = quiz_page.extract_questions()
+                with status_ctx("Analizuję stronę... (ESC przerywa)"):
+                    questions = quiz_page.extract_questions()
                 if not questions:
                     output_fn("Nie znaleziono pytania (.que). Czy jesteś w quizie?")
                     return AutoModeResult(
@@ -77,7 +83,8 @@ def run_auto_mode(
                 for idx, question in enumerate(questions, 1):
                     cancellation.raise_if_cancelled()
                     output_fn(f"\n--- Pytanie {idx}/{total} ---")
-                    answer = solver.solve(question)
+                    with status_ctx(f"Rozwiązuję pytanie {idx}/{total}... (ESC przerywa)"):
+                        answer = solver.solve(question)
                     if answer.reasoning:
                         output_fn(f"Uzasadnienie AI: {answer.reasoning}")
                     cancellation.raise_if_cancelled()
