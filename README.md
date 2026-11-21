@@ -3,14 +3,15 @@
 Uniwersalny asystent AI do rozwiązywania quizów na platformie Moodle (dowolny przedmiot). Skrypt korzysta z biblioteki **Playwright** do obsługi przeglądarki, a jako silnik AI domyślnie wykorzystuje **Antigravity CLI (`agy`)** na Twojej subskrypcji (z opcjonalnym fallbackiem na Google AI Studio API).
 
 ## Cechy projektu
-- **Uniwersalne profile przedmiotowe (`profiles.json`):** Wybór przedmiotu przy starcie (np. Ogólny, Probabilistyka i Statystyka, Matematyka, Sieci Komputerowe / IT) z dedykowanym promptem systemowym i modelem.
-- **Podpinanie materiałów źródłowych (PDF / MD):** Możesz wskazać wykłady lub notatki z dysku (np. z sejfu Obsidian), na których AI opiera odpowiedzi w pierwszej kolejności.
-- **Subskrypcja zamiast osobnego API (`agy CLI`):** Domyślnie używa `agy -p` w trybie ustrukturyzowanego JSON-a i utrzymuje kontekst w ramach jednego quizu (`--conversation`).
+- **Uniwersalne profile przedmiotowe (`profiles.json`):** Wybór i przełączanie przedmiotu na żywo (np. Ogólny, Probabilistyka i Statystyka, Matematyka, Sieci Komputerowe / IT) z dedykowanym promptem systemowym i modelem, a także edycja/tworzenie profili bezpośrednio z CLI.
+- **Podpinanie materiałów źródłowych (PDF / MD / TXT):** Możesz wskazać wykłady lub notatki z dysku (np. z sejfu Obsidian), na których AI opiera odpowiedzi w pierwszej kolejności.
+- **Subskrypcja zamiast osobnego API (`agy CLI`):** Domyślnie używa `agy -p` (domyślny model `gemini-4-hydrogen-medium`) w trybie ustrukturyzowanego JSON-a i utrzymuje kontekst w ramach jednego quizu (`--conversation`), z opcją przełączenia na Google AI Studio API (`api`) bez wychodzenia z programu.
+- **Interaktywna konsola `rich`:** Czytelny panel statusu sesji, tryb krokowy (`s`/`step`), opcje sesji (`confirm_before_next`, `show_reasoning`) oraz odporne zarządzanie przeglądarką (`url`, `open`) w jednej sesji logowania Moodle.
 - **Pełna obsługa typów pytań Moodle:**
   - Jednokrotnego wyboru (`radio`) i wielokrotnego wyboru (`checkbox`) z bezpiecznym klikaniem przy wzorach MathJax
   - Pytania otwarte (`text` / `textarea`)
   - Dopasowanie (`select` - wiele list rozwijanych + analiza obrazków w wierszach)
-- **Zawsze pod Twoją kontrolą:** W każdej chwili możesz wcisnąć **ESC** (lub **Ctrl+C**), żeby natychmiast przerwać tryb `AUTO`. Dodatkowo bot wypisuje krótkie uzasadnienie każdej decyzji AI.
+- **Zawsze pod Twoją kontrolą:** W każdej chwili możesz wcisnąć **ESC** (lub **Ctrl+C**), żeby natychmiast przerwać tryb `AUTO`. Dodatkowo bot wypisuje krótkie uzasadnienie każdej decyzji AI (z możliwością wyłączenia w opcjach).
 - **Wieloplatformowość bez uprawnień roota:** Przechwytywanie klawisza **ESC** działa natywnie bez biblioteki `keyboard` i bez `sudo` (Windows: `msvcrt`, Linux/macOS: `termios` + `select` w terminalu TTY, z fallbackiem na `SIGINT`). Obrazki z pytań są przetwarzane wyłącznie w pamięci (bez katalogu `.tmp_images`).
 
 ---
@@ -37,7 +38,7 @@ Sklonuj repozytorium i uruchom skrypt instalacyjny, który utworzy `venv`, zains
 
 ## 2. Jak przygotować profile (`profiles.json`)
 
-Plik `profiles.json` jest ignorowany przez Gita (`.gitignore`), żeby Twoje lokalne ścieżki nie trafiały do repozytorium. Jeśli go nie utworzysz, bot uruchomi się z jednym domyślnym profilem `Ogólny`.
+Plik `profiles.json` jest ignorowany przez Gita (`.gitignore`), żeby Twoje lokalne ścieżki nie trafiały do repozytorium. Jeśli go nie utworzysz, bot uruchomi się z jednym domyślnym profilem `Ogólny` (a nowy plik możesz zapisać także bezpośrednio z menu `o` / `options`).
 
 1. Skopiuj `profiles.example.json` i nazwij kopię `profiles.json`:
    ```powershell
@@ -96,14 +97,22 @@ Plik `profiles.json` jest ignorowany przez Gita (`.gitignore`), żeby Twoje loka
 3. W otwartym oknie Chromium zaloguj się na Moodle i przejdź na pierwszą stronę wybranego quizu.
 4. Sterowanie w terminalu:
    - **`Enter`**: Włącza tryb `AUTO` (bot rozwiązuje pytania na stronie i sam klika `Następna strona` aż do ekranu `Zapisz podejście`).
+   - **`s`** / **`step`**: Rozwiązuje tylko bieżącą stronę quizu bez automatycznego przejścia dalej.
+   - **`p`** / **`profile`**: Przełącza aktywny profil przedmiotu na żywo (resetując kontekst AI i ładując materiały nowego profilu bez zamykania przeglądarki).
+   - **`b`** / **`backend`**: Przełącza silnik AI (`agy` ↔ `api`) na żywo bez utraty sesji przeglądarki.
+   - **`m`** / **`model`**: Wybiera lub pozwala wpisać własny model AI dla aktywnego silnika (przy `agy` ukrywa modele dostępne wyłącznie w trybie `api`).
+   - **`l`** / **`reload`**: Przeładowuje `profiles.json` z dysku bez zamykania przeglądarki.
+   - **`o`** / **`options`**: Menu opcji sesji (`confirm_before_next` — pytanie przed przejściem do kolejnej strony, `show_reasoning` — wyświetlanie uzasadnień AI) oraz edycja/tworzenie profili z atomowym zapisem do `profiles.json`.
+   - **`url [adres]`**: Przechodzi w przeglądarce pod nowy adres URL (lub otwiera przeglądarkę pod tym adresem).
+   - **`open`**: Ponownie otwiera zamkniętą przeglądarkę pod bieżącym adresem.
    - **`ESC`**: Natychmiast przerywa tryb `AUTO` (działa również w trakcie oczekiwania na odpowiedź modelu).
    - **`r`** / **`reset`**: Resetuje pamięć rozmowy (`conversation_id` oraz cache materiałów) przed rozpoczęciem kolejnego quizu.
    - **`h`** / **`help`**: Wyświetla tabelę dostępnych komend.
-   - **`q`** / **`quit`**: Zamyka bota.
+   - **`q`** / **`quit`**: Zamyka przeglądarkę i kończy program.
 
 ### Opcjonalne flagi CLI
 
-Możesz pominąć menu startowe lub nadpisać adres logowania Moodle za pomocą flag:
+Możesz nadpisać domyślny profil, silnik lub adres logowania Moodle przy starcie:
 
 ```powershell
 python bot.py --profile matematyka --backend agy --url https://moodle2.e-wsb.pl/login/index.php
@@ -122,5 +131,5 @@ Zależności deweloperskie (`pytest`, `mypy`) są zdefiniowane w `pyproject.toml
 ```powershell
 pip install -e ".[dev]"
 python -m pytest
-python -m mypy
+python -m mypy --strict
 ```
