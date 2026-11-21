@@ -1,7 +1,7 @@
 {
   "ogolny": {
     "name": "Ogólny (dowolny przedmiot)",
-    "model": "gemini-3.8-flash-medium",
+    "model": "gemini-4-hydrogen-medium",
     "fallback_models": [
       "gemma-4-31b-it",
       "gemma-4-26b-a4b-it",

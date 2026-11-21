@@ -578,15 +578,17 @@ def test_bot_main_model_switching_for_agy_and_api_and_cancel(
     monkeypatch.setattr(bot, "AgyTransport", _FakeAgyTransport)
     monkeypatch.setattr(bot, "GenAiTransport", _FakeGenAiTransport)
 
-    # Deduplicated models across p1 and p2:
+    # For agy, API-only fallback_models are excluded:
+    # 1: m-p1, 2: m-p2, 3: custom
+    # For api, all deduplicated models are listed:
     # 1: m-p1, 2: m-fb1, 3: m-fb2, 4: m-p2, 5: custom
-    # Cancel model menu, then pick #4 (m-p2) for agy, run Auto,
+    # Cancel model menu, then pick #2 (m-p2) for agy, run Auto,
     # switch backend to api, pick custom model "m-custom" for api, run Auto,
     # then pick #3 (m-fb2) for api, run Auto, quit.
     commands = iter(
         [
             "m", "anuluj",
-            "m", "4", "",
+            "m", "2", "",
             "b", "2",
             "m", "5", "m-custom", "",
             "model", "3", "",

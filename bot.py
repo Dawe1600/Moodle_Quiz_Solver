@@ -262,7 +262,9 @@ def _handle_model_switch(
     input_fn: Callable[[str], str],
     renderer: CliRenderer,
 ) -> tuple[RuntimeSelection, Solver] | None:
-    models = collect_available_models(config.profiles, selection.profile.key)
+    models = collect_available_models(
+        config.profiles, selection.profile.key, backend=selection.backend
+    )
     custom_option = len(models) + 1
     renderer.clear()
     renderer.render_model_menu(models, selection.active_model)

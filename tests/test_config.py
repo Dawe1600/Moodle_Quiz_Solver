@@ -464,6 +464,10 @@ def test_collect_available_models_deduplicates_with_active_profile_first() -> No
         "m-fb2",
         "m-fb1",
     )
+    assert collect_available_models(profiles, active_profile_key="p2", backend="agy") == (
+        "m-active",
+        "m-shared",
+    )
 
 
 def test_runtime_selection_model_override_orders_agy_and_api_models() -> None:

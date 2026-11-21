@@ -23,11 +23,12 @@ from moodle_quiz_solver.domain import (
 from moodle_quiz_solver.exceptions import ConfigurationError
 
 DEFAULT_MOODLE_URL = "https://moodle2.e-wsb.pl/login/index.php"
+DEFAULT_AGY_MODEL = "gemini-4-hydrogen-medium"
 
 BUILTIN_OGOLNY_PROFILE = SubjectProfile(
     key="ogolny",
     name="Ogólny (dowolny przedmiot)",
-    model="gemini-3.8-flash-medium",
+    model=DEFAULT_AGY_MODEL,
     fallback_models=(
         "gemma-4-31b-it",
         "gemma-4-26b-a4b-it",
@@ -278,8 +279,10 @@ def count_profile_materials(profile: SubjectProfile) -> int:
 def collect_available_models(
     profiles: Mapping[str, SubjectProfile],
     active_profile_key: str,
+    *,
+    backend: BackendKind = "api",
 ) -> tuple[str, ...]:
-    """Collect deduplicated primary and fallback models, starting with the active profile."""
+    """Collect deduplicated models for the active backend, starting with the active profile."""
     ordered_profiles: list[SubjectProfile] = []
     if active_profile_key in profiles:
         ordered_profiles.append(profiles[active_profile_key])
@@ -290,7 +293,8 @@ def collect_available_models(
     models: list[str] = []
     for profile in ordered_profiles:
         models.append(profile.model)
-        models.extend(profile.fallback_models)
+        if backend == "api":
+            models.extend(profile.fallback_models)
     return tuple(dict.fromkeys(models))
 
 
