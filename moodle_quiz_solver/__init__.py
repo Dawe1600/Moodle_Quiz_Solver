@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+from moodle_quiz_solver.cancellation import (
+    Cancellation,
+    InMemoryCancellation,
+    TerminalCancellation,
+)
 from moodle_quiz_solver.domain import (
     Answer,
     AnswerType,
@@ -22,12 +27,15 @@ __all__ = [
     "Answer",
     "AnswerType",
     "BackendKind",
+    "Cancellation",
     "CancellationError",
     "ConfigurationError",
+    "InMemoryCancellation",
     "MoodleQuizSolverError",
     "Question",
     "QuizPageError",
     "ReferenceMaterial",
     "SolverError",
     "SubjectProfile",
+    "TerminalCancellation",
 ]
