@@ -274,3 +274,89 @@ def test_run_auto_mode_invokes_status_fn_for_page_and_questions() -> None:
     assert "1/2" in status_messages[1] and "ESC" in status_messages[1]
     assert "2/2" in status_messages[2] and "ESC" in status_messages[2]
 
+
+def test_run_auto_mode_stops_after_max_pages_without_advancing() -> None:
+    q1 = Question(index=0, prompt="Q1?", question_type="radio", options=("A", "B"))
+    q2 = Question(index=0, prompt="Q2?", question_type="radio", options=("C", "D"))
+    quiz_page = _FakeQuizPage(pages=[[q1], [q2]], outcomes=["next", "finished"])
+    transport = _FakeTransport(
+        ['{"answer_type": "radio", "selected_indices": [0], "reasoning": "A"}']
+    )
+    cancellation = _RecordingCancellation()
+    solver = Solver(profile=_profile(), transport=transport, cancellation=cancellation)
+    logs: list[str] = []
+
+    result = run_auto_mode(
+        quiz_page,
+        solver,
+        cancellation,
+        output_fn=logs.append,
+        max_pages=1,
+    )
+
+    assert result == AutoModeResult(
+        stop_reason="max_pages",
+        pages_completed=1,
+        questions_answered=1,
+    )
+    assert quiz_page.advance_calls == 0
+    assert len(quiz_page.applied) == 1
+
+
+def test_run_auto_mode_before_advance_accept_and_decline() -> None:
+    q1 = Question(index=0, prompt="Q1?", question_type="radio", options=("A", "B"))
+    q2 = Question(index=0, prompt="Q2?", question_type="radio", options=("C", "D"))
+    q3 = Question(index=0, prompt="Q3?", question_type="radio", options=("E", "F"))
+    quiz_page = _FakeQuizPage(pages=[[q1], [q2], [q3]], outcomes=["next", "next", "finished"])
+    transport = _FakeTransport(
+        [
+            '{"answer_type": "radio", "selected_indices": [0], "reasoning": "A"}',
+            '{"answer_type": "radio", "selected_indices": [1], "reasoning": "D"}',
+        ]
+    )
+    cancellation = _RecordingCancellation()
+    solver = Solver(profile=_profile(), transport=transport, cancellation=cancellation)
+    decisions = iter([True, False])
+
+    result = run_auto_mode(
+        quiz_page,
+        solver,
+        cancellation,
+        output_fn=lambda _: None,
+        before_advance=lambda: next(decisions),
+    )
+
+    assert result == AutoModeResult(
+        stop_reason="advance_declined",
+        pages_completed=2,
+        questions_answered=2,
+    )
+    assert quiz_page.advance_calls == 1
+    assert len(quiz_page.applied) == 2
+
+
+def test_run_auto_mode_suppresses_reasoning_when_show_reasoning_false() -> None:
+    q1 = Question(index=0, prompt="Q1?", question_type="radio", options=("A", "B"))
+    quiz_page = _FakeQuizPage(pages=[[q1]], outcomes=["finished"])
+    transport = _FakeTransport(
+        ['{"answer_type": "radio", "selected_indices": [0], "reasoning": "secret reasoning"}']
+    )
+    cancellation = _RecordingCancellation()
+    solver = Solver(profile=_profile(), transport=transport, cancellation=cancellation)
+    logs: list[str] = []
+
+    result = run_auto_mode(
+        quiz_page,
+        solver,
+        cancellation,
+        output_fn=logs.append,
+        show_reasoning=False,
+    )
+
+    assert result.stop_reason == "finished"
+    assert not any("secret reasoning" in line for line in logs)
+    assert not any("Uzasadnienie AI:" in line for line in logs)
+
+
+
+
