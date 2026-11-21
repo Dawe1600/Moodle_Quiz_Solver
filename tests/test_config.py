@@ -353,3 +353,61 @@ def test_select_runtime_raises_when_no_backend_available(tmp_path: Path) -> None
             has_genai=False,
             output_fn=lambda _: None,
         )
+
+
+def test_empty_optional_list_item_raises_configuration_error(tmp_path: Path) -> None:
+    profiles_file = tmp_path / "profiles.json"
+    profiles_file.write_text(
+        json.dumps(
+            {
+                "ogolny": {
+                    "name": "N",
+                    "model": "m",
+                    "system_prompt": "s",
+                    "materials_paths": ["   "],
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigurationError):
+        load_config(
+            profiles_path=profiles_file,
+            env_path=tmp_path / ".env",
+            env={},
+            cli_args=[],
+        )
+
+
+def test_empty_cli_url_raises_configuration_error(tmp_path: Path) -> None:
+    with pytest.raises(ConfigurationError, match="--url"):
+        load_config(
+            profiles_path=tmp_path / "missing.json",
+            env_path=tmp_path / ".env",
+            env={},
+            cli_args=["--url", "   "],
+        )
+
+
+def test_select_runtime_unknown_cli_profile_fails_before_backend_prompt(
+    tmp_path: Path,
+) -> None:
+    config = load_config(
+        profiles_path=tmp_path / "missing.json",
+        env_path=tmp_path / ".env",
+        env={"GEMINI_API_KEY": "AIzaRealKey"},
+        cli_args=["--profile", "unknown_subject"],
+    )
+
+    def fail_input(_: str) -> str:
+        raise AssertionError("input_fn should not be called when --profile is unknown")
+
+    with pytest.raises(ConfigurationError, match="unknown_subject"):
+        select_runtime(
+            config,
+            which=lambda _: "/usr/bin/agy",
+            has_genai=True,
+            input_fn=fail_input,
+            output_fn=lambda _: None,
+        )

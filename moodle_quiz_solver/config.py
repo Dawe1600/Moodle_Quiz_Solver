@@ -98,9 +98,11 @@ def _optional_str_tuple(raw: Mapping[str, Any], field_name: str, profile_key: st
     if field_name not in raw or raw[field_name] is None:
         return ()
     value = raw[field_name]
-    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+    if not isinstance(value, list) or not all(
+        isinstance(item, str) and item.strip() for item in value
+    ):
         raise ConfigurationError(
-            f"Profile '{profile_key}' field '{field_name}' must be a list of strings."
+            f"Profile '{profile_key}' field '{field_name}' must be a list of non-empty strings."
         )
     return tuple(value)
 
@@ -174,8 +176,11 @@ def _normalize_gemini_key(raw_key: str | None) -> str | None:
 
 
 def _resolve_moodle_url(cli_url: str | None, env: Mapping[str, str]) -> str:
-    if cli_url is not None and cli_url.strip():
-        return cli_url.strip()
+    if cli_url is not None:
+        stripped = cli_url.strip()
+        if not stripped:
+            raise ConfigurationError("CLI flag '--url' must not be empty.")
+        return stripped
     env_url = env.get("MOODLE_URL")
     if env_url is not None and env_url.strip():
         return env_url.strip()
@@ -210,10 +215,13 @@ class RuntimeSelection:
 
     backend: BackendKind
     agy_bin: str | None
-    profile_key: str
     profile: SubjectProfile
     moodle_url: str
     gemini_api_key: str | None
+
+    @property
+    def profile_key(self) -> str:
+        return self.profile.key
 
 
 def _is_genai_installed() -> bool:
@@ -273,7 +281,7 @@ def _select_profile(
     config: AppConfig,
     input_fn: Callable[[str], str],
     output_fn: Callable[[str], None],
-) -> tuple[str, SubjectProfile]:
+) -> SubjectProfile:
     if config.cli_profile is not None:
         profile = config.profiles.get(config.cli_profile)
         if profile is None:
@@ -281,7 +289,7 @@ def _select_profile(
             raise ConfigurationError(
                 f"Unknown profile '{config.cli_profile}'. Available profiles: {available}."
             )
-        return config.cli_profile, profile
+        return profile
 
     keys = list(config.profiles.keys())
     output_fn("\n=== Wybierz profil przedmiotu ===")
@@ -294,10 +302,9 @@ def _select_profile(
     while True:
         choice = input_fn(f"\nWybierz numer [1-{len(keys)}] (Enter = 1): ").strip()
         if not choice:
-            return keys[0], config.profiles[keys[0]]
+            return config.profiles[keys[0]]
         if choice.isdigit() and 1 <= int(choice) <= len(keys):
-            selected_key = keys[int(choice) - 1]
-            return selected_key, config.profiles[selected_key]
+            return config.profiles[keys[int(choice) - 1]]
         output_fn("Nieprawidłowy wybór, spróbuj ponownie.")
 
 
@@ -310,17 +317,22 @@ def select_runtime(
     output_fn: Callable[[str], None] = print,
 ) -> RuntimeSelection:
     """Resolve the active AI backend and Subject Profile from config and environment."""
+    if config.cli_profile is not None and config.cli_profile not in config.profiles:
+        available = ", ".join(config.profiles.keys())
+        raise ConfigurationError(
+            f"Unknown profile '{config.cli_profile}'. Available profiles: {available}."
+        )
+
     agy_bin = which("agy")
     genai_available = _is_genai_installed() if has_genai is None else has_genai
     backend, resolved_agy_bin = _select_backend(
         config, agy_bin, genai_available, input_fn, output_fn
     )
-    profile_key, profile = _select_profile(config, input_fn, output_fn)
+    profile = _select_profile(config, input_fn, output_fn)
 
     return RuntimeSelection(
         backend=backend,
         agy_bin=resolved_agy_bin,
-        profile_key=profile_key,
         profile=profile,
         moodle_url=config.moodle_url,
         gemini_api_key=config.gemini_api_key,
