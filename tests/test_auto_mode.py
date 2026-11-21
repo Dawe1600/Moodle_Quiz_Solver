@@ -1,0 +1,239 @@
+from __future__ import annotations
+
+from collections.abc import Iterator
+from contextlib import contextmanager
+
+import pytest
+
+from moodle_quiz_solver.auto_mode import AutoModeResult, run_auto_mode
+from moodle_quiz_solver.cancellation import InMemoryCancellation
+from moodle_quiz_solver.domain import Answer, Question, SubjectProfile
+from moodle_quiz_solver.exceptions import QuizPageError, SolverError
+from moodle_quiz_solver.quiz_page import NavigationOutcome
+from moodle_quiz_solver.solver import Solver, TransportRequest
+
+
+def _profile() -> SubjectProfile:
+    return SubjectProfile(
+        key="test",
+        name="Test",
+        model="test-model",
+        system_prompt="Solve accurately.",
+    )
+
+
+class _FakeTransport:
+    def __init__(self, responses: list[str]) -> None:
+        self._responses = list(responses)
+        self.requests: list[TransportRequest] = []
+        self.reset_calls = 0
+
+    def generate(self, request: TransportRequest) -> str:
+        self.requests.append(request)
+        if not self._responses:
+            raise AssertionError("Unexpected generate() call with no remaining fake responses")
+        return self._responses.pop(0)
+
+    def reset_session(self) -> None:
+        self.reset_calls += 1
+
+
+class _RecordingCancellation(InMemoryCancellation):
+    def __init__(self) -> None:
+        super().__init__()
+        self.arm_entries = 0
+        self.arm_exits = 0
+
+    @contextmanager
+    def armed(self) -> Iterator[None]:
+        self.arm_entries += 1
+        try:
+            yield
+        finally:
+            self.arm_exits += 1
+
+
+class _FakeQuizPage:
+    def __init__(
+        self,
+        pages: list[list[Question]],
+        outcomes: list[NavigationOutcome],
+    ) -> None:
+        self._pages = list(pages)
+        self._outcomes = list(outcomes)
+        self._page_idx = 0
+        self.applied: list[tuple[Question, Answer]] = []
+        self.advance_calls = 0
+
+    def extract_questions(self) -> list[Question]:
+        if self._page_idx >= len(self._pages):
+            return []
+        return list(self._pages[self._page_idx])
+
+    def apply_answer(self, question: Question, answer: Answer) -> None:
+        self.applied.append((question, answer))
+
+    def advance(self) -> NavigationOutcome:
+        self.advance_calls += 1
+        outcome = self._outcomes[self._page_idx]
+        if outcome == "next":
+            self._page_idx += 1
+        return outcome
+
+
+def test_run_auto_mode_completes_multiple_pages_and_arms_cancellation() -> None:
+    q1 = Question(index=0, prompt="Q1?", question_type="radio", options=("A", "B"))
+    q2 = Question(index=1, prompt="Q2?", question_type="text")
+    q3 = Question(index=0, prompt="Q3?", question_type="radio", options=("X", "Y"))
+
+    quiz_page = _FakeQuizPage(
+        pages=[[q1, q2], [q3]],
+        outcomes=["next", "finished"],
+    )
+    transport = _FakeTransport(
+        [
+            '{"answer_type": "radio", "selected_indices": [1], "reasoning": "B is right"}',
+            '{"answer_type": "text", "text_answers": ["42"], "reasoning": "42"}',
+            '{"answer_type": "radio", "selected_indices": [0], "reasoning": "X is right"}',
+        ]
+    )
+    cancellation = _RecordingCancellation()
+    solver = Solver(profile=_profile(), transport=transport, cancellation=cancellation)
+    logs: list[str] = []
+
+    result = run_auto_mode(quiz_page, solver, cancellation, output_fn=logs.append)
+
+    assert result == AutoModeResult(
+        stop_reason="finished",
+        pages_completed=2,
+        questions_answered=3,
+    )
+    assert cancellation.arm_entries == 1
+    assert cancellation.arm_exits == 1
+    assert quiz_page.advance_calls == 2
+    assert [(q.prompt, a.answer_type) for q, a in quiz_page.applied] == [
+        ("Q1?", "radio"),
+        ("Q2?", "text"),
+        ("Q3?", "radio"),
+    ]
+    assert quiz_page.applied[0][1].selected_indices == (1,)
+    assert quiz_page.applied[1][1].text_answers == ("42",)
+    assert quiz_page.applied[2][1].selected_indices == (0,)
+
+
+def test_run_auto_mode_aborts_mid_question_without_advancing_on_cancellation() -> None:
+    q1 = Question(index=0, prompt="Q1?", question_type="radio", options=("A", "B"))
+    q2 = Question(index=1, prompt="Q2?", question_type="radio", options=("C", "D"))
+    quiz_page = _FakeQuizPage(pages=[[q1, q2]], outcomes=["next"])
+    cancellation = _RecordingCancellation()
+
+    class _CancellingTransport:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def generate(self, request: TransportRequest) -> str:
+            self.calls += 1
+            if self.calls == 1:
+                return '{"answer_type": "radio", "selected_indices": [0], "reasoning": "ok"}'
+            cancellation.trigger()
+            return '{"answer_type": "radio", "selected_indices": [1], "reasoning": "late"}'
+
+        def reset_session(self) -> None:
+            pass
+
+    solver = Solver(
+        profile=_profile(),
+        transport=_CancellingTransport(),
+        cancellation=cancellation,
+    )
+
+    result = run_auto_mode(quiz_page, solver, cancellation, output_fn=lambda _: None)
+
+    assert result.stop_reason == "cancelled"
+    assert result.pages_completed == 0
+    assert result.questions_answered == 1
+    assert len(quiz_page.applied) == 1
+    assert quiz_page.advance_calls == 0
+    assert cancellation.arm_entries == 1
+    assert cancellation.arm_exits == 1
+
+
+def test_run_auto_mode_stops_without_advancing_on_solver_error() -> None:
+    q1 = Question(index=0, prompt="Q1?", question_type="radio", options=("A", "B"))
+    q2 = Question(index=1, prompt="Q2?", question_type="text")
+    quiz_page = _FakeQuizPage(pages=[[q1, q2]], outcomes=["next"])
+    transport = _FakeTransport(
+        [
+            '{"answer_type": "radio", "selected_indices": [0], "reasoning": "ok"}',
+            "not valid json",
+        ]
+    )
+    cancellation = _RecordingCancellation()
+    solver = Solver(profile=_profile(), transport=transport, cancellation=cancellation)
+
+    result = run_auto_mode(quiz_page, solver, cancellation, output_fn=lambda _: None)
+
+    assert result.stop_reason == "solver_error"
+    assert result.pages_completed == 0
+    assert result.questions_answered == 1
+    assert result.error is not None
+    assert len(quiz_page.applied) == 1
+    assert quiz_page.advance_calls == 0
+
+
+def test_run_auto_mode_stops_without_advancing_on_page_error() -> None:
+    q1 = Question(index=0, prompt="Q1?", question_type="radio", options=("A", "B"))
+
+    class _FailingApplyQuizPage(_FakeQuizPage):
+        def apply_answer(self, question: Question, answer: Answer) -> None:
+            raise QuizPageError("Control disabled")
+
+    quiz_page = _FailingApplyQuizPage(pages=[[q1]], outcomes=["next"])
+    transport = _FakeTransport(
+        ['{"answer_type": "radio", "selected_indices": [0], "reasoning": "ok"}']
+    )
+    cancellation = _RecordingCancellation()
+    solver = Solver(profile=_profile(), transport=transport, cancellation=cancellation)
+
+    result = run_auto_mode(quiz_page, solver, cancellation, output_fn=lambda _: None)
+
+    assert result.stop_reason == "page_error"
+    assert result.error == "Control disabled"
+    assert result.questions_answered == 0
+    assert quiz_page.advance_calls == 0
+
+
+def test_run_auto_mode_stops_on_missing_navigation() -> None:
+    q1 = Question(index=0, prompt="Q1?", question_type="radio", options=("A", "B"))
+    quiz_page = _FakeQuizPage(pages=[[q1]], outcomes=["missing"])
+    transport = _FakeTransport(
+        ['{"answer_type": "radio", "selected_indices": [1], "reasoning": "ok"}']
+    )
+    cancellation = _RecordingCancellation()
+    solver = Solver(profile=_profile(), transport=transport, cancellation=cancellation)
+
+    result = run_auto_mode(quiz_page, solver, cancellation, output_fn=lambda _: None)
+
+    assert result == AutoModeResult(
+        stop_reason="missing_navigation",
+        pages_completed=0,
+        questions_answered=1,
+    )
+    assert quiz_page.advance_calls == 1
+
+
+def test_run_auto_mode_stops_without_advancing_when_no_questions_found() -> None:
+    quiz_page = _FakeQuizPage(pages=[[]], outcomes=["next"])
+    transport = _FakeTransport([])
+    cancellation = _RecordingCancellation()
+    solver = Solver(profile=_profile(), transport=transport, cancellation=cancellation)
+
+    result = run_auto_mode(quiz_page, solver, cancellation, output_fn=lambda _: None)
+
+    assert result == AutoModeResult(
+        stop_reason="no_questions",
+        pages_completed=0,
+        questions_answered=0,
+    )
+    assert quiz_page.advance_calls == 0
+

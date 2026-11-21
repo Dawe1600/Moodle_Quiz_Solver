@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from moodle_quiz_solver.auto_mode import AutoModeResult, AutoStopReason, run_auto_mode
 from moodle_quiz_solver.cancellation import (
     Cancellation,
     InMemoryCancellation,
@@ -33,6 +34,8 @@ from moodle_quiz_solver.solver import Solver
 __all__ = [
     "Answer",
     "AnswerType",
+    "AutoModeResult",
+    "AutoStopReason",
     "BackendKind",
     "Cancellation",
     "CancellationError",
@@ -50,4 +53,5 @@ __all__ = [
     "SubjectProfile",
     "TerminalCancellation",
     "open_quiz_page",
+    "run_auto_mode",
 ]

@@ -10,7 +10,8 @@ Uniwersalny asystent AI do rozwiązywania quizów na platformie Moodle (dowolny 
   - Jednokrotnego wyboru (`radio`) i wielokrotnego wyboru (`checkbox`) z bezpiecznym klikaniem przy wzorach MathJax
   - Pytania otwarte (`text` / `textarea`)
   - Dopasowanie (`select` - wiele list rozwijanych + analiza obrazków w wierszach)
-- **Zawsze pod Twoją kontrolą:** W każdej chwili możesz wcisnąć **ESC**, żeby natychmiast przerwać tryb `AUTO`. Dodatkowo bot wypisuje krótkie uzasadnienie każdej decyzji AI.
+- **Zawsze pod Twoją kontrolą:** W każdej chwili możesz wcisnąć **ESC** (lub **Ctrl+C**), żeby natychmiast przerwać tryb `AUTO`. Dodatkowo bot wypisuje krótkie uzasadnienie każdej decyzji AI.
+- **Wieloplatformowość bez uprawnień roota:** Przechwytywanie klawisza **ESC** działa natywnie bez biblioteki `keyboard` i bez `sudo` (Windows: `msvcrt`, Linux/macOS: `termios` + `select` w terminalu TTY, z fallbackiem na `SIGINT`). Obrazki z pytań są przetwarzane wyłącznie w pamięci (bez katalogu `.tmp_images`).
 
 ---
 
@@ -96,5 +97,29 @@ Plik `profiles.json` jest ignorowany przez Gita (`.gitignore`), żeby Twoje loka
 4. Sterowanie w terminalu:
    - **`Enter`**: Włącza tryb `AUTO` (bot rozwiązuje pytania na stronie i sam klika `Następna strona` aż do ekranu `Zapisz podejście`).
    - **`ESC`**: Natychmiast przerywa tryb `AUTO` (działa również w trakcie oczekiwania na odpowiedź modelu).
-   - **`r`**: Resetuje pamięć rozmowy (`conversation_id`) przed rozpoczęciem kolejnego quizu.
+   - **`r`**: Resetuje pamięć rozmowy (`conversation_id` oraz cache materiałów) przed rozpoczęciem kolejnego quizu.
    - **`q`**: Zamyka bota.
+
+### Opcjonalne flagi CLI
+
+Możesz pominąć menu startowe lub nadpisać adres logowania Moodle za pomocą flag:
+
+```powershell
+python bot.py --profile matematyka --backend agy --url https://moodle2.e-wsb.pl/login/index.php
+```
+
+- `--profile <klucz>`: Klucz profilu z `profiles.json` (np. `ogolny`).
+- `--backend <agy|api>`: Wymuszenie silnika AI (`agy` lub `api`).
+- `--url <adres>`: Adres startowy Moodle (można też ustawić zmienną `MOODLE_URL` w `.env`).
+
+---
+
+## 5. Testy i weryfikacja (`pytest` / `mypy`)
+
+Zależności deweloperskie (`pytest`, `mypy`) są zdefiniowane w `pyproject.toml`:
+
+```powershell
+pip install -e ".[dev]"
+python -m pytest
+python -m mypy
+```

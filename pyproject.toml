@@ -23,4 +23,4 @@ pythonpath = ["."]
 python_version = "3.12"
 strict = true
 warn_unused_configs = true
-files = ["moodle_quiz_solver", "tests"]
+files = ["bot.py", "moodle_quiz_solver", "tests"]
