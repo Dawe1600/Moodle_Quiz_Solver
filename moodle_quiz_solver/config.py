@@ -7,6 +7,7 @@ import importlib.util
 import json
 import os
 import shutil
+import tempfile
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -133,7 +134,8 @@ def _parse_profile(key: str, raw: Any) -> SubjectProfile:
     )
 
 
-def _load_profiles(profiles_path: Path | None) -> dict[str, SubjectProfile]:
+def load_profiles(profiles_path: Path | None = None) -> dict[str, SubjectProfile]:
+    """Load and validate Subject Profiles from disk, or fall back to built-in general profile."""
     path = profiles_path if profiles_path is not None else Path.cwd() / "profiles.json"
     if not path.exists():
         return {"ogolny": BUILTIN_OGOLNY_PROFILE}
@@ -155,6 +157,55 @@ def _load_profiles(profiles_path: Path | None) -> dict[str, SubjectProfile]:
             raise ConfigurationError(f"Profiles file {path} contains an invalid empty profile key.")
         profiles[key] = _parse_profile(key, entry)
     return profiles
+
+
+def _serialize_profile(profile: SubjectProfile) -> dict[str, Any]:
+    return {
+        "name": profile.name,
+        "model": profile.model,
+        "fallback_models": list(profile.fallback_models),
+        "system_prompt": profile.system_prompt,
+        "materials_paths": [str(p) for p in profile.materials_paths],
+    }
+
+
+def save_profiles(
+    profiles: Mapping[str, SubjectProfile],
+    profiles_path: Path | None = None,
+) -> Path:
+    """Atomically write Subject Profiles to JSON (creating parent dirs and file if missing)."""
+    if not profiles:
+        raise ConfigurationError("Cannot save empty profiles mapping.")
+
+    path = profiles_path if profiles_path is not None else Path.cwd() / "profiles.json"
+    payload = {key: _serialize_profile(profile) for key, profile in profiles.items()}
+    serialized = json.dumps(payload, indent=2, ensure_ascii=False) + "\n"
+
+    tmp_path: Path | None = None
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as tmp_file:
+            tmp_path = Path(tmp_file.name)
+            tmp_file.write(serialized)
+            tmp_file.flush()
+            os.fsync(tmp_file.fileno())
+        os.replace(tmp_path, path)
+    except OSError as exc:
+        if tmp_path is not None:
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+        raise ConfigurationError(f"Failed to save profiles to {path}: {exc}") from exc
+
+    return path
 
 
 def _resolve_env(env_path: Path | None, env: Mapping[str, str] | None) -> Mapping[str, str]:
@@ -201,7 +252,7 @@ def load_config(
     """Load and validate application configuration without import-time side effects."""
     cli = parse_cli_args(cli_args)
     resolved_env = _resolve_env(env_path, env)
-    profiles = _load_profiles(profiles_path)
+    profiles = load_profiles(profiles_path)
     gemini_api_key = _normalize_gemini_key(resolved_env.get("GEMINI_API_KEY"))
     moodle_url = _resolve_moodle_url(cli.url, resolved_env)
 

@@ -534,3 +534,72 @@ def test_resolve_backend_switch_validates_availability_with_polish_errors(
     assert resolve_backend_switch(
         "api", with_key_config, which=lambda _: None, has_genai=True
     ) == ("api", None)
+
+
+def test_save_profiles_auto_creates_file_atomically_and_round_trips(tmp_path: Path) -> None:
+    from moodle_quiz_solver.config import load_profiles, save_profiles
+    from moodle_quiz_solver.domain import SubjectProfile
+
+    target = tmp_path / "nested" / "profiles.json"
+    profiles = {
+        "ogolny": SubjectProfile(
+            key="ogolny",
+            name="Ogólny (żółć)",
+            model="gemini-3.8-flash-medium",
+            system_prompt="Rozwiązuj uważnie.",
+            fallback_models=("gemma-4-31b-it",),
+            materials_paths=(tmp_path / "wyklad.pdf",),
+        ),
+    }
+
+    written = save_profiles(profiles, profiles_path=target)
+
+    assert written == target
+    assert target.exists()
+    raw_text = target.read_text(encoding="utf-8")
+    assert "Ogólny (żółć)" in raw_text
+    assert "\\u00f3" not in raw_text
+    assert '  "ogolny": {' in raw_text
+    assert [p.name for p in target.parent.iterdir()] == ["profiles.json"]
+
+    reloaded = load_profiles(target)
+    assert reloaded == profiles
+
+
+def test_save_profiles_uses_atomic_os_replace_and_preserves_existing_on_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import os
+
+    from moodle_quiz_solver.config import save_profiles
+    from moodle_quiz_solver.domain import SubjectProfile
+
+    target = tmp_path / "profiles.json"
+    target.write_text('{"ogolny": {"name": "Old", "model": "m", "system_prompt": "s"}}', encoding="utf-8")
+    replace_calls: list[tuple[Path, Path]] = []
+
+    def _failing_replace(src: str | os.PathLike[str], dst: str | os.PathLike[str]) -> None:
+        replace_calls.append((Path(src), Path(dst)))
+        raise OSError("disk full")
+
+    monkeypatch.setattr(os, "replace", _failing_replace)
+
+    profiles = {
+        "ogolny": SubjectProfile(key="ogolny", name="New", model="m", system_prompt="s"),
+    }
+    with pytest.raises(ConfigurationError, match="Failed to save profiles"):
+        save_profiles(profiles, profiles_path=target)
+
+    assert len(replace_calls) == 1
+    assert replace_calls[0][0].parent == target.parent
+    assert replace_calls[0][1] == target
+    assert [p.name for p in tmp_path.iterdir()] == ["profiles.json"]
+    assert '"Old"' in target.read_text(encoding="utf-8")
+
+
+def test_save_profiles_rejects_empty_mapping(tmp_path: Path) -> None:
+    from moodle_quiz_solver.config import save_profiles
+
+    with pytest.raises(ConfigurationError, match="empty"):
+        save_profiles({}, profiles_path=tmp_path / "profiles.json")

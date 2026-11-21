@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import shutil
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import AbstractContextManager
 from dataclasses import replace
+from pathlib import Path
 
 from playwright.sync_api import Error as PlaywrightError
 
@@ -18,14 +19,17 @@ from moodle_quiz_solver.cli_ui import (
     format_toggle_label,
 )
 from moodle_quiz_solver.config import (
+    BUILTIN_OGOLNY_PROFILE,
     AppConfig,
     RuntimeSelection,
     collect_available_models,
     load_config,
+    load_profiles as _load_profiles,
     resolve_backend_switch,
+    save_profiles,
     select_runtime,
 )
-from moodle_quiz_solver.domain import BackendKind
+from moodle_quiz_solver.domain import BackendKind, SubjectProfile
 from moodle_quiz_solver.exceptions import ConfigurationError, QuizPageError
 from moodle_quiz_solver.quiz_page import QuizPage, open_quiz_page
 from moodle_quiz_solver.solver import AgyTransport, GenAiTransport, ModelTransport, Solver
@@ -151,8 +155,12 @@ def _rebuild_solver(selection: RuntimeSelection, cancellation: Cancellation) -> 
     return Solver(profile=selection.profile, transport=transport, cancellation=cancellation)
 
 
+def _is_explicit_cancel(raw: str) -> bool:
+    return raw.strip().lower() in ("0", "q", "quit", "anuluj", "cancel")
+
+
 def _is_cancel_input(raw: str) -> bool:
-    return raw.strip().lower() in ("", "0", "q", "quit", "anuluj", "cancel")
+    return not raw.strip() or _is_explicit_cancel(raw)
 
 
 def _parse_menu_index(raw: str, max_index: int) -> int | None:
@@ -282,9 +290,218 @@ _SWITCH_HANDLERS: dict[str, _SwitchHandler] = {
 }
 
 
-def _confirm_advance(input_fn: Callable[[str], str]) -> bool:
-    reply = input_fn("Przejść do następnej strony? [t/N]: ").strip().lower()
+def _handle_reload_profiles(
+    config: AppConfig,
+    selection: RuntimeSelection,
+    cancellation: Cancellation,
+    *,
+    renderer: CliRenderer,
+) -> tuple[AppConfig, RuntimeSelection, Solver] | None:
+    try:
+        reloaded_profiles = _load_profiles()
+    except ConfigurationError as exc:
+        renderer.render_message(
+            f"BŁĄD: Nie udało się przeładować profili ({exc}). Zachowano poprzednią konfigurację."
+        )
+        return None
+
+    new_config = replace(config, profiles=reloaded_profiles)
+    active_key = selection.profile.key
+    if active_key in reloaded_profiles:
+        next_profile = reloaded_profiles[active_key]
+        status_note = f"Przeładowano profile z dysku. Aktywny profil: {next_profile.name} ({next_profile.key})."
+    else:
+        fallback_key = "ogolny" if "ogolny" in reloaded_profiles else next(iter(reloaded_profiles))
+        next_profile = reloaded_profiles[fallback_key]
+        status_note = (
+            f"Przeładowano profile z dysku. Poprzedni profil '{active_key}' został usunięty; "
+            f"przełączono na: {next_profile.name} ({next_profile.key})."
+        )
+
+    new_selection = replace(selection, profile=next_profile, model_override=None)
+    new_solver = _rebuild_solver(new_selection, cancellation)
+    renderer.render_message(status_note)
+    return new_config, new_selection, new_solver
+
+
+def _confirm_yes_no(input_fn: Callable[[str], str], prompt: str) -> bool:
+    reply = input_fn(prompt).strip().lower()
     return reply in ("t", "tak", "y", "yes")
+
+
+def _confirm_advance(input_fn: Callable[[str], str]) -> bool:
+    return _confirm_yes_no(input_fn, "Przejść do następnej strony? [t/N]: ")
+
+
+def _prompt_and_persist_profiles(
+    profiles: Mapping[str, SubjectProfile],
+    *,
+    input_fn: Callable[[str], str],
+    renderer: CliRenderer,
+) -> None:
+    if not _confirm_yes_no(input_fn, "Zapisać zmiany w pliku profiles.json? [t/N]: "):
+        renderer.render_message("Zmiany zachowano tylko w pamięci bieżącej sesji.")
+        return
+
+    try:
+        saved_path = save_profiles(profiles)
+    except ConfigurationError as exc:
+        renderer.render_message(f"BŁĄD: {exc}")
+        return
+    renderer.render_message(f"Zapisano profile do pliku: {saved_path.name}.")
+
+
+def _apply_profile_change(
+    config: AppConfig,
+    selection: RuntimeSelection,
+    cancellation: Cancellation,
+    updated_profile: SubjectProfile,
+    *,
+    model_override: str | None,
+    message: str,
+    input_fn: Callable[[str], str],
+    renderer: CliRenderer,
+) -> tuple[AppConfig, RuntimeSelection, Solver]:
+    new_profiles = {**config.profiles, updated_profile.key: updated_profile}
+    new_config = replace(config, profiles=new_profiles)
+    new_selection = replace(selection, profile=updated_profile, model_override=model_override)
+    new_solver = _rebuild_solver(new_selection, cancellation)
+    renderer.render_message(message)
+    _prompt_and_persist_profiles(new_config.profiles, input_fn=input_fn, renderer=renderer)
+    return new_config, new_selection, new_solver
+
+
+def _edit_active_profile(
+    config: AppConfig,
+    selection: RuntimeSelection,
+    cancellation: Cancellation,
+    *,
+    input_fn: Callable[[str], str],
+    renderer: CliRenderer,
+) -> tuple[AppConfig, RuntimeSelection, Solver]:
+    while True:
+        profile = selection.profile
+        renderer.render_profile_edit_menu(profile)
+        choice = input_fn("Wybierz pole do edycji [1-4, 0/Enter=Powrót]: ").strip().lower()
+        if choice in ("", "0", "b", "back", "q"):
+            return config, selection, _rebuild_solver(selection, cancellation)
+
+        updated: SubjectProfile | None = None
+        model_override = selection.model_override
+
+        if choice == "1":
+            new_model = input_fn(
+                f"Nowy model AI (obecny: {profile.model}, Enter/0=Anuluj): "
+            ).strip()
+            if not _is_cancel_input(new_model):
+                updated = replace(profile, model=new_model)
+                model_override = None
+        elif choice == "2":
+            raw_path = input_fn("Ścieżka materiału źródłowego (Enter/0=Anuluj): ").strip()
+            if not _is_cancel_input(raw_path):
+                candidate = Path(raw_path)
+                if candidate in profile.materials_paths:
+                    renderer.render_message("Ta ścieżka jest już przypisana do profilu.")
+                    continue
+                updated = replace(profile, materials_paths=(*profile.materials_paths, candidate))
+        elif choice == "3":
+            if not profile.materials_paths:
+                renderer.render_message("Profil nie ma przypisanych ścieżek materiałów.")
+                continue
+            for idx, mat_path in enumerate(profile.materials_paths, start=1):
+                renderer.render_message(f"{idx}. {mat_path}")
+            raw_idx = input_fn(
+                f"Wybierz numer ścieżki do usunięcia [1-{len(profile.materials_paths)}, 0/Enter=Anuluj]: "
+            )
+            if not _is_cancel_input(raw_idx):
+                chosen_idx = _parse_menu_index(raw_idx, len(profile.materials_paths))
+                if chosen_idx is None:
+                    renderer.render_message("Nieprawidłowy wybór ścieżki.")
+                    continue
+                remaining = tuple(
+                    p for i, p in enumerate(profile.materials_paths, start=1) if i != chosen_idx
+                )
+                updated = replace(profile, materials_paths=remaining)
+        elif choice == "4":
+            new_prompt = input_fn("Nowa instrukcja systemowa (Enter/0=Anuluj): ").strip()
+            if not _is_cancel_input(new_prompt):
+                updated = replace(profile, system_prompt=new_prompt)
+        else:
+            renderer.render_message(f"Nieprawidłowa opcja: '{choice}'. Wybierz 1-4 lub 0.")
+            continue
+
+        if updated is not None:
+            config, selection, _ = _apply_profile_change(
+                config,
+                selection,
+                cancellation,
+                updated,
+                model_override=model_override,
+                message=f"Zaktualizowano profil '{updated.key}' w pamięci.",
+                input_fn=input_fn,
+                renderer=renderer,
+            )
+
+
+def _create_new_profile(
+    config: AppConfig,
+    selection: RuntimeSelection,
+    cancellation: Cancellation,
+    *,
+    input_fn: Callable[[str], str],
+    renderer: CliRenderer,
+) -> tuple[AppConfig, RuntimeSelection, Solver] | None:
+    raw_key = input_fn("Klucz nowego profilu (np. fizyka, Enter/0=Anuluj): ").strip()
+    if _is_cancel_input(raw_key):
+        return None
+    if any(ch.isspace() for ch in raw_key):
+        renderer.render_message("Klucz profilu nie może zawierać spacji.")
+        return None
+    if raw_key in config.profiles:
+        renderer.render_message(f"Profil o kluczu '{raw_key}' już istnieje.")
+        return None
+
+    raw_name = input_fn("Nazwa nowego profilu (Enter/0=Anuluj): ").strip()
+    if _is_cancel_input(raw_name):
+        return None
+
+    raw_model = input_fn(f"Model AI [Enter={selection.profile.model}, 0=Anuluj]: ").strip()
+    if _is_explicit_cancel(raw_model):
+        return None
+    model = raw_model if raw_model else selection.profile.model
+
+    raw_prompt = input_fn("Instrukcja systemowa [Enter=domyślna, 0=Anuluj]: ").strip()
+    if _is_explicit_cancel(raw_prompt):
+        return None
+    system_prompt = raw_prompt if raw_prompt else BUILTIN_OGOLNY_PROFILE.system_prompt
+
+    raw_materials = input_fn(
+        "Ścieżki materiałów (oddzielone przecinkiem, Enter=brak): "
+    ).strip()
+    materials_paths = (
+        tuple(Path(item.strip()) for item in raw_materials.split(",") if item.strip())
+        if raw_materials
+        else ()
+    )
+
+    new_profile = SubjectProfile(
+        key=raw_key,
+        name=raw_name,
+        model=model,
+        system_prompt=system_prompt,
+        fallback_models=selection.profile.fallback_models,
+        materials_paths=materials_paths,
+    )
+    return _apply_profile_change(
+        config,
+        selection,
+        cancellation,
+        new_profile,
+        model_override=None,
+        message=f"Utworzono i aktywowano profil '{new_profile.name}' ({new_profile.key}) w pamięci.",
+        input_fn=input_fn,
+        renderer=renderer,
+    )
 
 
 def _run_options_menu(
@@ -293,15 +510,20 @@ def _run_options_menu(
     *,
     confirm_before_next: bool,
     show_reasoning: bool,
-) -> tuple[bool, bool]:
+    config: AppConfig,
+    selection: RuntimeSelection,
+    solver: Solver,
+    cancellation: Cancellation,
+) -> tuple[bool, bool, AppConfig, RuntimeSelection, Solver]:
     while True:
         renderer.render_options_menu(
             confirm_before_next=confirm_before_next,
             show_reasoning=show_reasoning,
+            active_profile=selection.profile,
         )
-        choice = input_fn("Wybierz opcję [1-2, 0/Enter=Powrót]: ").strip().lower()
+        choice = input_fn("Wybierz opcję [1-4, 0/Enter=Powrót]: ").strip().lower()
         if choice in ("", "0", "b", "back", "q"):
-            return confirm_before_next, show_reasoning
+            return confirm_before_next, show_reasoning, config, selection, solver
         if choice == "1":
             confirm_before_next = not confirm_before_next
             renderer.render_message(
@@ -314,7 +536,19 @@ def _run_options_menu(
                 f"Ustawiono show_reasoning: {format_toggle_label(show_reasoning)}"
             )
             continue
-        renderer.render_message(f"Nieprawidłowa opcja: '{choice}'. Wybierz 1, 2 lub 0.")
+        if choice == "3":
+            config, selection, solver = _edit_active_profile(
+                config, selection, cancellation, input_fn=input_fn, renderer=renderer
+            )
+            continue
+        if choice == "4":
+            created = _create_new_profile(
+                config, selection, cancellation, input_fn=input_fn, renderer=renderer
+            )
+            if created is not None:
+                config, selection, solver = created
+            continue
+        renderer.render_message(f"Nieprawidłowa opcja: '{choice}'. Wybierz 1-4 lub 0.")
 
 
 def main(
@@ -369,7 +603,7 @@ def main(
                 )
             )
             raw_cmd = input_fn(
-                "Polecenie [Enter=Auto, s=Krok, p=Profil, b=Silnik, m=Model, o=Opcje, url=Adres, open=Otwórz, r=Reset, h=Pomoc, q=Wyjście]: "
+                "Polecenie [Enter=Auto, s=Krok, p=Profil, b=Silnik, m=Model, l=Przeładuj, o=Opcje, url=Adres, open=Otwórz, r=Reset, h=Pomoc, q=Wyjście]: "
             )
             stripped = raw_cmd.strip()
             parts = stripped.split(maxsplit=1)
@@ -388,15 +622,32 @@ def main(
                 solver.reset_session()
                 renderer.render_message("Zresetowano sesję kontekstu AI.")
                 continue
+            if cmd in ("l", "reload"):
+                reloaded = _handle_reload_profiles(
+                    config, selection, cancellation, renderer=renderer
+                )
+                if reloaded is not None:
+                    config, selection, solver = reloaded
+                continue
             if cmd in ("h", "help"):
                 renderer.render_help_table()
                 continue
             if cmd in ("o", "options"):
-                confirm_before_next, show_reasoning = _run_options_menu(
+                (
+                    confirm_before_next,
+                    show_reasoning,
+                    config,
+                    selection,
+                    solver,
+                ) = _run_options_menu(
                     renderer,
                     input_fn,
                     confirm_before_next=confirm_before_next,
                     show_reasoning=show_reasoning,
+                    config=config,
+                    selection=selection,
+                    solver=solver,
+                    cancellation=cancellation,
                 )
                 continue
             if cmd == "open" and len(parts) == 1:

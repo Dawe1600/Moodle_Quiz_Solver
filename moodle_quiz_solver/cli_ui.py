@@ -133,7 +133,7 @@ class CliRenderer:
         panel = Panel(
             grid,
             title="Moodle Quiz Solver",
-            subtitle="[Enter] Auto  |  s/step Krok  |  p Profil  |  b Silnik  |  m Model  |  o/options Opcje  |  url Adres  |  open Otwórz  |  r/reset Reset  |  h/help Pomoc  |  q/quit Wyjście",
+            subtitle="[Enter] Auto  |  s/step Krok  |  p Profil  |  b Silnik  |  m Model  |  l/reload Przeładuj  |  o/options Opcje  |  url Adres  |  open Otwórz  |  r/reset Reset  |  h/help Pomoc  |  q/quit Wyjście",
             border_style="blue",
             expand=False,
         )
@@ -149,7 +149,8 @@ class CliRenderer:
         table.add_row("p / profile", "Przełącza aktywny profil przedmiotu")
         table.add_row("b / backend", "Przełącza silnik AI (agy / api) bez zamykania przeglądarki")
         table.add_row("m / model", "Wybiera lub wpisuje model AI dla aktywnego silnika")
-        table.add_row("o / options", "Otwiera menu opcji sesji")
+        table.add_row("l / reload", "Przeładowuje profile z dysku bez zamykania przeglądarki")
+        table.add_row("o / options", "Otwiera menu opcji sesji i edycji profili")
         table.add_row(
             "url [adres]",
             "Przechodzi pod nowy adres URL (lub otwiera przeglądarkę pod tym adresem)",
@@ -234,8 +235,9 @@ class CliRenderer:
         *,
         confirm_before_next: bool,
         show_reasoning: bool,
+        active_profile: SubjectProfile | None = None,
     ) -> None:
-        """Render the numbered session options submenu."""
+        """Render the numbered session options and profile management submenu."""
         table = Table(title="Opcje sesji", border_style="cyan")
         table.add_column("#", style="bold green", no_wrap=True)
         table.add_column("Ustawienie")
@@ -250,5 +252,30 @@ class CliRenderer:
             "Wyświetlaj uzasadnienie AI (show_reasoning)",
             format_toggle_label(show_reasoning),
         )
+        edit_label = (
+            f"Edytuj aktywny profil ({active_profile.key})"
+            if active_profile is not None
+            else "Edytuj aktywny profil przedmiotu"
+        )
+        table.add_row("3", edit_label, active_profile.model if active_profile is not None else "")
+        table.add_row("4", "Utwórz nowy profil przedmiotu", "")
         table.add_row("0", "Powrót do menu głównego", "")
+        self._emit(table)
+
+    def render_profile_edit_menu(self, profile: SubjectProfile) -> None:
+        """Render the numbered submenu for editing a Subject Profile."""
+        table = Table(title=f"Edycja profilu: {profile.name} ({profile.key})", border_style="cyan")
+        table.add_column("#", style="bold green", no_wrap=True)
+        table.add_column("Pole")
+        table.add_column("Bieżąca wartość")
+        prompt_preview = (
+            f"{profile.system_prompt[:37]}..."
+            if len(profile.system_prompt) > 40
+            else profile.system_prompt
+        )
+        table.add_row("1", "Zmień model AI", profile.model)
+        table.add_row("2", "Dodaj ścieżkę materiału źródłowego", f"{len(profile.materials_paths)} szt.")
+        table.add_row("3", "Usuń ścieżkę materiału źródłowego", f"{len(profile.materials_paths)} szt.")
+        table.add_row("4", "Edytuj instrukcję systemową", prompt_preview)
+        table.add_row("0", "Powrót do opcji", "")
         self._emit(table)

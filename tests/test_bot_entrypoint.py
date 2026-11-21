@@ -961,3 +961,260 @@ def test_bot_main_closed_browser_guard_protects_step_mode(
     assert "Przeglądarka jest zamknięta. Użyj 'open' lub 'url', aby ją otworzyć." in joined
     assert "Zamknięta" in joined
     assert "Strony: 1" not in joined
+
+
+def _install_fake_step_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[list[int], list[tuple[str, str, int]]]:
+    """Patch browser and AgyTransport for reload/options tests, tracking open/close & requests."""
+    lifecycle = [0, 0]  # [open_count, close_count]
+    seen_requests: list[tuple[str, str, int]] = []
+
+    class _FakeQuizPage:
+        def extract_questions(self) -> list[Question]:
+            return [Question(index=0, prompt="Q?", question_type="radio", options=("A", "B"))]
+
+        def apply_answer(self, question: Question, answer: Answer) -> None:
+            pass
+
+        def advance(self) -> NavigationOutcome:
+            return "finished"
+
+        def is_open(self) -> bool:
+            return True
+
+    @contextmanager
+    def _fake_open_quiz_page(start_url: str | None = None) -> Iterator[_FakeQuizPage]:
+        lifecycle[0] += 1
+        try:
+            yield _FakeQuizPage()
+        finally:
+            lifecycle[1] += 1
+
+    class _FakeAgyTransport:
+        def __init__(self, *, agy_bin: str, model: str, cancellation: object) -> None:
+            self.model = model
+
+        def generate(self, request: object) -> str:
+            system_prompt = getattr(request, "system_prompt", "")
+            materials = getattr(request, "materials", ())
+            seen_requests.append((self.model, system_prompt, len(materials)))
+            return '{"answer_type": "radio", "selected_indices": [0], "reasoning": "ok"}'
+
+        def reset_session(self) -> None:
+            pass
+
+    monkeypatch.setattr(bot, "open_quiz_page", _fake_open_quiz_page)
+    monkeypatch.setattr(bot, "AgyTransport", _FakeAgyTransport)
+    return lifecycle, seen_requests
+
+
+def test_bot_main_reload_refreshes_profiles_resets_solver_and_keeps_browser_open(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    profiles_path = tmp_path / "profiles.json"
+    profiles_path.write_text(
+        json.dumps(
+            {
+                "matematyka": {
+                    "name": "Matematyka",
+                    "model": "m-old",
+                    "system_prompt": "Old prompt",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    material_file = tmp_path / "notatki.md"
+    material_file.write_text("# Notatki\nWzór E=mc^2", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("shutil.which", lambda name: "/usr/bin/agy" if name == "agy" else None)
+
+    lifecycle, seen_requests = _install_fake_step_session(monkeypatch)
+
+    def _drive() -> Iterator[str]:
+        yield "s"
+        profiles_path.write_text(
+            json.dumps(
+                {
+                    "matematyka": {
+                        "name": "Matematyka 2",
+                        "model": "m-new",
+                        "system_prompt": "New prompt",
+                        "materials_paths": [str(material_file)],
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+        yield "l"
+        yield "s"
+        profiles_path.write_text(
+            json.dumps(
+                {
+                    "fizyka": {
+                        "name": "Fizyka",
+                        "model": "m-phys",
+                        "system_prompt": "Physics prompt",
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+        yield "reload"
+        yield "s"
+        yield "q"
+
+    inputs = _drive()
+    logs: list[str] = []
+    exit_code = bot.main([], input_fn=lambda _prompt: next(inputs), output_fn=logs.append)
+
+    assert exit_code == 0
+    assert lifecycle == [1, 1]
+    assert seen_requests == [
+        ("m-old", "Old prompt", 0),
+        ("m-new", "New prompt", 1),
+        ("m-phys", "Physics prompt", 0),
+    ]
+
+
+def test_bot_main_reload_rolls_back_on_invalid_json(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    profiles_path = tmp_path / "profiles.json"
+    profiles_path.write_text(
+        json.dumps(
+            {
+                "matematyka": {
+                    "name": "Matematyka",
+                    "model": "m-good",
+                    "system_prompt": "Good prompt",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("shutil.which", lambda name: "/usr/bin/agy" if name == "agy" else None)
+
+    _lifecycle, seen_requests = _install_fake_step_session(monkeypatch)
+
+    def _drive() -> Iterator[str]:
+        profiles_path.write_text("{broken json", encoding="utf-8")
+        yield "l"
+        yield "s"
+        yield "q"
+
+    inputs = _drive()
+    logs: list[str] = []
+    exit_code = bot.main([], input_fn=lambda _prompt: next(inputs), output_fn=logs.append)
+
+    joined = "\n".join(logs)
+    assert exit_code == 0
+    assert "BŁĄD:" in joined
+    assert "Matematyka (matematyka)" in joined
+    assert [req[0] for req in seen_requests] == ["m-good"]
+
+
+def test_bot_main_options_edit_profile_auto_creates_profiles_json_and_respects_save_prompt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    material_file = tmp_path / "wyklad.md"
+    material_file.write_text("# Wykład\nTreść", encoding="utf-8")
+    env_file = tmp_path / ".env"
+    env_file.write_text("MOODLE_URL=https://moodle.test/login\n", encoding="utf-8")
+    env_before = env_file.read_text(encoding="utf-8")
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("shutil.which", lambda name: "/usr/bin/agy" if name == "agy" else None)
+
+    _lifecycle, seen_requests = _install_fake_step_session(monkeypatch)
+
+    commands = iter(
+        [
+            "o",
+            "3",  # edit active profile (ogolny)
+            "1",
+            "gemini-edited",
+            "t",  # confirm save
+            "2",
+            str(material_file),
+            "t",  # confirm save
+            "4",
+            "Nowy prompt z opcji",
+            "t",  # confirm save
+            "3",
+            "1",  # remove material path
+            "n",  # decline save -> in-memory only
+            "0",  # back to options
+            "0",  # back to main
+            "s",  # step mode uses in-memory state (0 materials)
+            "q",
+        ]
+    )
+    logs: list[str] = []
+    exit_code = bot.main([], input_fn=lambda _prompt: next(commands), output_fn=logs.append)
+
+    assert exit_code == 0
+    profiles_path = tmp_path / "profiles.json"
+    assert profiles_path.exists()
+    saved = json.loads(profiles_path.read_text(encoding="utf-8"))
+    assert saved["ogolny"]["model"] == "gemini-edited"
+    assert saved["ogolny"]["system_prompt"] == "Nowy prompt z opcji"
+    assert saved["ogolny"]["materials_paths"] == [str(material_file)]
+    assert seen_requests == [("gemini-edited", "Nowy prompt z opcji", 0)]
+    assert env_file.read_text(encoding="utf-8") == env_before
+
+
+def test_bot_main_options_create_profile_declined_vs_confirmed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("shutil.which", lambda name: "/usr/bin/agy" if name == "agy" else None)
+
+    _lifecycle, seen_requests = _install_fake_step_session(monkeypatch)
+
+    commands = iter(
+        [
+            "o",
+            "4",  # create profile (declined save)
+            "fizyka",
+            "Fizyka",
+            "m-phys",
+            "Prompt fizyka",
+            "",
+            "n",
+            "0",
+            "s",
+            "o",
+            "4",  # create second profile (confirmed save)
+            "chemia",
+            "Chemia",
+            "m-chem",
+            "Prompt chemia",
+            "",
+            "t",
+            "0",
+            "s",
+            "q",
+        ]
+    )
+    logs: list[str] = []
+    exit_code = bot.main([], input_fn=lambda _prompt: next(commands), output_fn=logs.append)
+
+    assert exit_code == 0
+    assert [(req[0], req[1]) for req in seen_requests] == [
+        ("m-phys", "Prompt fizyka"),
+        ("m-chem", "Prompt chemia"),
+    ]
+    profiles_path = tmp_path / "profiles.json"
+    assert profiles_path.exists()
+    saved = json.loads(profiles_path.read_text(encoding="utf-8"))
+    assert "ogolny" in saved
+    assert "fizyka" in saved
+    assert "chemia" in saved
+    assert not (tmp_path / ".env").exists()
