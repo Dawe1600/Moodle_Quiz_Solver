@@ -101,19 +101,27 @@ class PlaywrightQuizPage:
     def advance(self) -> NavigationOutcome:
         """Advance to the next quiz page if available, or report completion/missing."""
         if self._has_visible_match(
-            "input[name='finishattempt']:not([type='hidden']), "
-            "button[name='finishattempt'], "
-            "[data-quiz-action='finish'], [data-action='finish-attempt'], "
-            "#mod_quiz-next-nav[data-finish='true'], a.endtestlink"
+            "form#responseform input[name='finishattempt']:not([type='hidden']), "
+            "form#responseform button[name='finishattempt'], "
+            ".submitbtns input[name='finishattempt']:not([type='hidden']), "
+            ".submitbtns button[name='finishattempt'], "
+            "form#responseform [data-quiz-action='finish'], "
+            "form#responseform [data-action='finish-attempt'], "
+            ".submitbtns [data-quiz-action='finish'], "
+            ".submitbtns [data-action='finish-attempt'], "
+            "#mod_quiz-next-nav[data-finish='true']"
         ):
             return "finished"
 
         if self._has_visible_match(
             "#mod_quiz-next-nav[value*='Zapisz podejście'], "
+            "#mod_quiz-next-nav[value*='Zakończ podejście'], "
             "#mod_quiz-next-nav[value*='Finish attempt'], "
             ".submitbtns input[type='submit'][value*='Zapisz podejście'], "
+            ".submitbtns input[type='submit'][value*='Zakończ podejście'], "
             ".submitbtns input[type='submit'][value*='Finish attempt'], "
             ".submitbtns button:has-text('Zapisz podejście'), "
+            ".submitbtns button:has-text('Zakończ podejście'), "
             ".submitbtns button:has-text('Finish attempt')"
         ):
             return "finished"

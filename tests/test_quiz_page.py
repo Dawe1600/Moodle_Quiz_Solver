@@ -301,6 +301,44 @@ def test_extract_captures_question_option_and_matching_row_images_in_memory(
             "missing",
             False,
         ),
+        (
+            '<aside class="block_quiz_navblock">'
+            '<a class="endtestlink aalink" href="#summary">Zapisz podejście ...</a>'
+            "</aside>"
+            '<form id="responseform"><div class="submitbtns">'
+            '<input type="submit" name="previous" value="Poprzednia strona" '
+            'class="mod_quiz-prev-nav btn btn-secondary" id="mod_quiz-prev-nav" />'
+            '<input type="submit" name="next" value="Następna strona" '
+            'class="mod_quiz-next-nav btn btn-primary" id="mod_quiz-next-nav" '
+            'onclick="window.__clicked=true; return false;" />'
+            "</div></form>",
+            "next",
+            True,
+        ),
+        (
+            '<aside><button name="finishattempt">Zapisz podejście ...</button></aside>'
+            '<form id="responseform"><div class="submitbtns">'
+            '<input type="submit" name="next" value="Następna strona" '
+            'class="mod_quiz-next-nav btn btn-primary" id="mod_quiz-next-nav" '
+            'onclick="window.__clicked=true; return false;" />'
+            "</div></form>",
+            "next",
+            True,
+        ),
+        (
+            '<aside class="block_quiz_navblock">'
+            '<a class="endtestlink aalink" href="#summary">Zapisz podejście ...</a>'
+            "</aside>"
+            '<form id="responseform"><div class="submitbtns">'
+            '<input type="submit" name="previous" value="Poprzednia strona" '
+            'class="mod_quiz-prev-nav btn btn-secondary" id="mod_quiz-prev-nav" />'
+            '<input type="submit" name="next" value="Zapisz podejście ..." '
+            'class="mod_quiz-next-nav btn btn-primary" id="mod_quiz-next-nav" '
+            'onclick="window.__clicked=true; return false;" />'
+            "</div></form>",
+            "finished",
+            False,
+        ),
     ],
 )
 def test_advance_checks_structural_selectors_before_polish_fallback(
