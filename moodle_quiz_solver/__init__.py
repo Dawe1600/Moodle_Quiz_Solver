@@ -22,6 +22,7 @@ from moodle_quiz_solver.exceptions import (
     QuizPageError,
     SolverError,
 )
+from moodle_quiz_solver.solver import Solver
 
 __all__ = [
     "Answer",
@@ -35,6 +36,7 @@ __all__ = [
     "Question",
     "QuizPageError",
     "ReferenceMaterial",
+    "Solver",
     "SolverError",
     "SubjectProfile",
     "TerminalCancellation",
