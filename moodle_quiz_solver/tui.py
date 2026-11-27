@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
+import time
 from collections.abc import Callable, Mapping
 from contextlib import AbstractContextManager
 from dataclasses import dataclass, field, replace
@@ -35,7 +36,7 @@ from moodle_quiz_solver.config import (
     save_profiles,
 )
 from moodle_quiz_solver.domain import BackendKind, SubjectProfile
-from moodle_quiz_solver.exceptions import ConfigurationError
+from moodle_quiz_solver.exceptions import CancellationError, ConfigurationError
 from moodle_quiz_solver.quiz_page import QuizPage
 from moodle_quiz_solver.solver import Solver
 from moodle_quiz_solver.tui_stream import (
@@ -207,6 +208,8 @@ class DashboardApp(App[int]):
         self.solver = session.solver_builder(session.selection, session.cancellation)
         self._runner = AutoModeRunner(self, session.cancellation, self._on_auto_event)
         self._pages_before_run = 0
+        self.warm_up_status = "—"
+        self._warm_up_token: object | None = None
 
     def compose(self) -> ComposeResult:
         with Horizontal():
@@ -223,6 +226,7 @@ class DashboardApp(App[int]):
     def on_mount(self) -> None:
         self.refresh_sidebar()
         self.run_worker(self._open_browser(), exclusive=True, group="browser")
+        self.start_session_warm_up()
 
     async def _run_in_browser(self, fn: Callable[[], _T]) -> _T:
         return await asyncio.wrap_future(self._worker.submit(fn))
@@ -250,6 +254,7 @@ class DashboardApp(App[int]):
             f"Potwierdzanie przejścia: {format_toggle_label(self.confirm_before_next)}",
             f"Pokazuj uzasadnienie: {format_toggle_label(self.show_reasoning)}",
             f"Flagi: {format_active_flags(self._session.config)}",
+            f"Sesja AI: {self.warm_up_status}",
         ]
         self.query_one(SessionSidebar).update("\n".join(lines))
 
@@ -330,6 +335,8 @@ class DashboardApp(App[int]):
         self._pages_before_run = self.pages_solved
         self.query_one("#stop", Button).disabled = False
         self.log_activity("Krok: bieżąca strona quizu." if step else "Start trybu AUTO.")
+        if self.warm_up_status == "rozgrzewanie…":
+            self.query_one(ProgressIndicator).update("Rozgrzewanie sesji AI… (Esc przerywa)")
         solver = self.solver
         confirm = self.confirm_before_next
         reasoning = self.show_reasoning
@@ -376,6 +383,7 @@ class DashboardApp(App[int]):
         self._session.selection = selection
         self.solver = self._session.solver_builder(selection, self._session.cancellation)
         self.log_activity(message)
+        self.start_session_warm_up()
         self.refresh_sidebar()
 
     def action_switch_profile(self) -> None:
@@ -581,6 +589,51 @@ class DashboardApp(App[int]):
     def action_reset_context(self) -> None:
         self.solver.reset_session()
         self.log_activity("Zresetowano kontekst AI.")
+        self.start_session_warm_up()
+        self.refresh_sidebar()
+
+    # --- Session Warm-up (#20) ------------------------------------------------------
+
+    def start_session_warm_up(self) -> None:
+        """Warm the current Solver's AI session in the background (no-op for stateless backends)."""
+        solver = self.solver
+        token = self._warm_up_token = object()
+        if not self._runner.running:
+            # A latched ESC from an earlier run must not abort the new warm-up.
+            self._session.cancellation.reset()
+        self.warm_up_status = "rozgrzewanie…"
+
+        def _warm() -> None:
+            started = time.monotonic()
+            try:
+                warmed = solver.warm_up()
+            except CancellationError:
+                note = "Przerwano rozgrzewanie sesji AI. Pierwsze pytanie wyśle pełny kontekst."
+                self.call_from_thread(self._on_warm_up_done, token, None, note)
+                return
+            except Exception as exc:  # Warm-up never blocks work: report and fall back.
+                warning = (
+                    f"UWAGA: Rozgrzewanie sesji AI nie powiodło się ({exc}). "
+                    "Pierwsze pytanie wyśle pełny kontekst."
+                )
+                self.call_from_thread(self._on_warm_up_done, token, None, warning)
+                return
+            elapsed = time.monotonic() - started if warmed else None
+            self.call_from_thread(self._on_warm_up_done, token, elapsed, None)
+
+        self.run_worker(_warm, thread=True, group="warmup")
+
+    def _on_warm_up_done(self, token: object, elapsed_s: float | None, warning: str | None) -> None:
+        if token is not self._warm_up_token:
+            return  # Result of an abandoned Solver or session: discard.
+        if warning is not None:
+            self.warm_up_status = "błąd"
+            self.log_activity(warning)
+        elif elapsed_s is not None:
+            self.warm_up_status = "gotowa"
+            self.log_activity(f"Sesja AI gotowa ({elapsed_s:.0f} s)")
+        else:
+            self.warm_up_status = "—"
         self.refresh_sidebar()
 
 

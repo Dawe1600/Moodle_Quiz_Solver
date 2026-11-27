@@ -169,3 +169,89 @@ async def test_browser_open_failure_is_reported_in_stream_and_sidebar(tmp_path: 
         await pilot.pause()
         assert "Przeglądarka: Zamknięta" in str(app.query_one(SessionSidebar).render())
         assert any("brak Chromium" in e for e in app.query_one(ActivityStream).entries)
+
+
+# --- Session Warm-up and per-question timing (#20) ---------------------------
+
+
+class _WarmableTransport(_FakeTransport):
+    def __init__(self, *, fail: bool = False) -> None:
+        self.fail = fail
+        self.warm_ups = 0
+
+    def warm_up(self, request: object) -> str:
+        self.warm_ups += 1
+        if self.fail:
+            from moodle_quiz_solver.exceptions import SolverError
+
+            raise SolverError("agy timeout")
+        return '{"answer_type": "text", "reasoning": "wyklad.pdf"}'
+
+
+def _warm_session(tmp_path: Path, transports: list[_WarmableTransport], *, fail: bool = False) -> TuiSession:
+    session = _make_session(tmp_path, opener_log=[], closed=[])
+
+    def _build(sel: RuntimeSelection, cancellation: Cancellation) -> Solver:
+        transport = _WarmableTransport(fail=fail)
+        transports.append(transport)
+        return Solver(profile=sel.profile, transport=transport, cancellation=cancellation)
+
+    session.solver_builder = _build
+    return session
+
+
+async def test_session_warm_up_starts_on_mount_and_logs_ready_time(tmp_path: Path) -> None:
+    transports: list[_WarmableTransport] = []
+    app = DashboardApp(_warm_session(tmp_path, transports))
+
+    async with app.run_test() as pilot:
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        entries = app.query_one(ActivityStream).entries
+        assert transports[0].warm_ups == 1
+        assert any(e.startswith("Sesja AI gotowa (") and e.endswith(" s)") for e in entries)
+        assert "Sesja AI: gotowa" in str(app.query_one(SessionSidebar).render())
+
+
+async def test_session_warm_up_failure_logs_warning(tmp_path: Path) -> None:
+    app = DashboardApp(_warm_session(tmp_path, [], fail=True))
+
+    async with app.run_test() as pilot:
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        entries = app.query_one(ActivityStream).entries
+        assert any(e.startswith("UWAGA") and "agy timeout" in e for e in entries)
+        assert not any(e.startswith("Sesja AI gotowa") for e in entries)
+
+
+async def test_selection_change_and_reset_rewarm_new_solver(tmp_path: Path) -> None:
+    from dataclasses import replace
+
+    transports: list[_WarmableTransport] = []
+    app = DashboardApp(_warm_session(tmp_path, transports))
+
+    async with app.run_test() as pilot:
+        await app.workers.wait_for_complete()
+        app._apply_selection(replace(app._session.selection, model_override="inny"), "Zmieniono.")
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        assert [t.warm_ups for t in transports] == [1, 1]
+        await pilot.press("r")
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        assert transports[-1].warm_ups == 2
+
+
+def test_question_card_shows_solve_time() -> None:
+    from moodle_quiz_solver.auto_mode import QuestionAnswered
+    from moodle_quiz_solver.tui_stream import format_question_card
+
+    event = QuestionAnswered(
+        page_number=1,
+        position=1,
+        total=2,
+        question=Question(index=0, prompt="P"),
+        answer=Answer(answer_type="text", reasoning="r", text_answers=("x",)),
+        elapsed_s=3.4,
+    )
+    assert "(3 s)" in format_question_card(event, show_reasoning=False).splitlines()[0]

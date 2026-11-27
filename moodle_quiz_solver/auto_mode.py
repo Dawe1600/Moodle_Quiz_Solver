@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable
 from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
@@ -61,6 +62,7 @@ class QuestionAnswered:
     total: int
     question: Question
     answer: Answer
+    elapsed_s: float = 0.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -168,7 +170,9 @@ def _run(
                         )
                     )
                     with status_ctx(f"Rozwiązuję pytanie {idx}/{total}... (ESC przerywa)"):
+                        solve_started = time.monotonic()
                         answer = solver.solve(question)
+                        elapsed_s = time.monotonic() - solve_started
                     if show_reasoning and answer.reasoning:
                         output_fn(f"Uzasadnienie AI: {answer.reasoning}")
                     cancellation.raise_if_cancelled()
@@ -181,6 +185,7 @@ def _run(
                             total=total,
                             question=question,
                             answer=answer,
+                            elapsed_s=elapsed_s,
                         )
                     )
 

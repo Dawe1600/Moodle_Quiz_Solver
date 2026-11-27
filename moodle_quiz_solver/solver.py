@@ -7,11 +7,12 @@ import json
 import re
 import subprocess
 import tempfile
+import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol, TypeVar, cast
+from typing import Any, Protocol, TypeVar, cast, runtime_checkable
 
 from moodle_quiz_solver.cancellation import Cancellation
 from moodle_quiz_solver.domain import (
@@ -26,6 +27,7 @@ from moodle_quiz_solver.exceptions import CancellationError, SolverError
 
 _T = TypeVar("_T")
 _VALID_ANSWER_TYPES: tuple[AnswerType, ...] = ("radio", "checkbox", "text", "select")
+_QUESTION_LABEL = "PYTANIE Z MOODLE:\n"
 _FENCE_RE = re.compile(r"```[^\n]*\n(.*?)```", re.DOTALL)
 
 ANSWER_SCHEMA: dict[str, Any] = {
@@ -68,6 +70,24 @@ class TransportRequest:
     system_prompt: str
     materials: tuple[ReferenceMaterial, ...]
     images: tuple[bytes, ...]
+
+
+WARM_UP_PROMPT = (
+    "ROZGRZEWANIE SESJI: zanim padnie pierwsze pytanie, przeczytaj teraz w całości każdy z "
+    "powyższych materiałów źródłowych (definicje, wzory, numery stron) i zapamiętaj je na "
+    "potrzeby kolejnych pytań w tej rozmowie. Potwierdź gotowość: zwróć JSON zgodny ze "
+    'schematem z answer_type "text", a w polu reasoning wypisz przeczytane pliki.\n'
+    + json.dumps(ANSWER_SCHEMA, ensure_ascii=False)
+)
+
+
+@runtime_checkable
+class WarmableTransport(Protocol):
+    """Optional ModelTransport extension for backends that keep a conversation (Session Warm-up)."""
+
+    def warm_up(self, request: TransportRequest) -> str:
+        """Open a fresh conversation with the session context and return the raw response."""
+        ...
 
 
 class ModelTransport(Protocol):
@@ -236,6 +256,26 @@ class Solver:
         raw_response = self._transport.generate(request)
         return _parse_answer(raw_response)
 
+    def warm_up(self) -> bool:
+        """Run a Session Warm-up; return False when the transport has no conversation to warm.
+
+        Raises SolverError (or CancellationError) when the warm-up fails; the next Question then
+        simply falls back to sending the full session context.
+        """
+        transport = self._transport
+        if not isinstance(transport, WarmableTransport):
+            return False
+        _check_cancelled(self._cancellation)
+        request = TransportRequest(
+            prompt=WARM_UP_PROMPT,
+            system_prompt=self._profile.system_prompt,
+            materials=self._load_materials(),
+            images=(),
+        )
+        # Validated only to confirm the model followed the schema; the content is not used.
+        _parse_answer(transport.warm_up(request))
+        return True
+
     def reset_session(self) -> None:
         """Clear cached Reference Materials and reset underlying transport session."""
         self._cached_materials = None
@@ -273,10 +313,38 @@ class AgyTransport:
         self._sleep = sleep_fn
         self._poll_interval = poll_interval
         self._conversation_id: str | None = None
+        # Serializes agy calls (warm-up vs. solve); the epoch invalidates in-flight results.
+        self._call_lock = threading.Lock()
+        self._epoch = 0
 
     def reset_session(self) -> None:
-        """Clear the preserved conversation_id."""
+        """Clear the preserved conversation_id and discard any in-flight session result."""
+        self._epoch += 1
         self._conversation_id = None
+
+    def _acquire_call_lock(self) -> None:
+        timeout = max(self._poll_interval, 0.01)
+        while not self._call_lock.acquire(timeout=timeout):
+            _check_cancelled(self._cancellation)
+
+    def warm_up(self, request: TransportRequest) -> str:
+        """Session Warm-up: start a fresh conversation that reads the session context."""
+        self._acquire_call_lock()
+        try:
+            epoch = self._epoch
+            returncode, stdout, stderr = self._run_once(
+                request,
+                image_paths=[],
+                temp_dir=None,
+                conversation_id=None,
+                prompt_label="",
+            )
+            if returncode != 0:
+                detail = stderr.strip() or f"exit code {returncode}"
+                raise SolverError(f"agy CLI warm-up failed: {detail}")
+            return self._extract_envelope_payload(stdout, epoch=epoch)
+        finally:
+            self._call_lock.release()
 
     def _build_prompt(
         self,
@@ -284,6 +352,7 @@ class AgyTransport:
         *,
         image_paths: list[Path],
         include_session_context: bool,
+        prompt_label: str = _QUESTION_LABEL,
     ) -> str:
         parts: list[str] = []
         if include_session_context:
@@ -300,7 +369,7 @@ class AgyTransport:
                 "OBRAZKI Z PYTANIA (odczytaj je dokładnie z dysku, zwracając uwagę na wykresy, "
                 "wzory i liczby):\n" + img_list
             )
-        parts.append("PYTANIE Z MOODLE:\n" + request.prompt)
+        parts.append(prompt_label + request.prompt)
         return "\n\n".join(parts)
 
     def _build_cmd(
@@ -345,6 +414,7 @@ class AgyTransport:
         image_paths: list[Path],
         temp_dir: Path | None,
         conversation_id: str | None,
+        prompt_label: str = _QUESTION_LABEL,
     ) -> tuple[int, str, str]:
         _check_cancelled(self._cancellation)
 
@@ -352,6 +422,7 @@ class AgyTransport:
             request,
             image_paths=image_paths,
             include_session_context=conversation_id is None,
+            prompt_label=prompt_label,
         )
         cmd = self._build_cmd(
             request,
@@ -381,7 +452,7 @@ class AgyTransport:
         stdout, stderr = proc.communicate()
         return int(proc.returncode), str(stdout or ""), str(stderr or "")
 
-    def _extract_envelope_payload(self, stdout: str) -> str:
+    def _extract_envelope_payload(self, stdout: str, *, epoch: int) -> str:
         try:
             envelope = json.loads(stdout)
         except json.JSONDecodeError as exc:
@@ -391,7 +462,7 @@ class AgyTransport:
             raise SolverError("agy CLI envelope must be a JSON object.")
 
         new_conv_id = envelope.get("conversation_id")
-        if isinstance(new_conv_id, str) and new_conv_id:
+        if isinstance(new_conv_id, str) and new_conv_id and epoch == self._epoch:
             self._conversation_id = new_conv_id
 
         structured = envelope.get("structured_output")
@@ -407,7 +478,18 @@ class AgyTransport:
         raise SolverError("agy CLI returned an empty response envelope.")
 
     def generate(self, request: TransportRequest) -> str:
-        """Invoke `agy` CLI with scoped temp images and retry once if a session errors."""
+        """Invoke `agy` CLI with scoped temp images and retry once if a session errors.
+
+        Waits for an in-flight Session Warm-up so agy never runs twice in parallel.
+        """
+        self._acquire_call_lock()
+        try:
+            return self._generate_locked(request)
+        finally:
+            self._call_lock.release()
+
+    def _generate_locked(self, request: TransportRequest) -> str:
+        epoch = self._epoch
         with tempfile.TemporaryDirectory(prefix="moodle_quiz_solver_") as tmp_dir:
             tmp_path = Path(tmp_dir)
             image_paths: list[Path] = []
@@ -438,7 +520,7 @@ class AgyTransport:
                 detail = stderr.strip() or f"exit code {returncode}"
                 raise SolverError(f"agy CLI failed: {detail}")
 
-            return self._extract_envelope_payload(stdout)
+            return self._extract_envelope_payload(stdout, epoch=epoch)
 
 
 def _import_genai_modules() -> tuple[Any, Any]:

@@ -134,7 +134,7 @@ async def test_auto_mode_renders_question_cards_and_updates_counters() -> None:
         cards = _cards(app)
         assert len(cards) == 4
         assert cards[0].splitlines() == [
-            "Strona 1 · Pytanie 1/2",
+            "Strona 1 · Pytanie 1/2 (0 s)",
             "Treść: Strona 1 pytanie 1?",
             "Odpowiedź: Tak",
             "Uzasadnienie AI: Bo tak wynika z wykładu.",

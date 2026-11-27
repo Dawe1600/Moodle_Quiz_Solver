@@ -604,3 +604,177 @@ def test_genai_transport_raises_solver_error_when_all_models_fail() -> None:
 
 
 
+
+
+# --- Session Warm-up (#20) ---------------------------------------------------
+
+
+def _agy_envelope(conv_id: str, reasoning: str = "ok") -> str:
+    return json.dumps(
+        {
+            "conversation_id": conv_id,
+            "structured_output": {"answer_type": "text", "reasoning": reasoning},
+        }
+    )
+
+
+def test_warm_up_sends_session_context_and_first_solve_reuses_conversation(
+    tmp_path: Path,
+) -> None:
+    mat_path = tmp_path / "wyklad.md"
+    mat_path.write_text("Notatki", encoding="utf-8")
+    seen_cmds: list[list[str]] = []
+    procs = [_FakePopen(stdout=_agy_envelope("conv-warm")), _FakePopen(stdout=_agy_envelope("conv-warm"))]
+
+    def fake_popen(cmd: list[str], **_kw: object) -> _FakePopen:
+        seen_cmds.append(list(cmd))
+        return procs.pop(0)
+
+    transport = AgyTransport(agy_bin="agy", model="m", popen_fn=fake_popen, sleep_fn=lambda _s: None)
+    solver = Solver(_make_profile((mat_path,)), transport)
+
+    assert solver.warm_up() is True
+    warm_prompt = seen_cmds[0][seen_cmds[0].index("-p") + 1]
+    assert "--conversation" not in seen_cmds[0]
+    assert "INSTRUKCJA SYSTEMOWA:" in warm_prompt
+    assert str(mat_path) in warm_prompt
+    assert "--json-schema" in seen_cmds[0]
+
+    solver.solve(Question(index=0, prompt="P1"))
+    assert seen_cmds[1][seen_cmds[1].index("--conversation") + 1] == "conv-warm"
+    assert "INSTRUKCJA SYSTEMOWA:" not in seen_cmds[1][seen_cmds[1].index("-p") + 1]
+
+
+def test_warm_up_failure_raises_and_first_solve_uses_full_context() -> None:
+    seen_cmds: list[list[str]] = []
+    procs = [_FakePopen(returncode=1, stderr="boom"), _FakePopen(stdout=_agy_envelope("conv-1"))]
+
+    def fake_popen(cmd: list[str], **_kw: object) -> _FakePopen:
+        seen_cmds.append(list(cmd))
+        return procs.pop(0)
+
+    transport = AgyTransport(agy_bin="agy", model="m", popen_fn=fake_popen, sleep_fn=lambda _s: None)
+    solver = Solver(_make_profile(), transport)
+
+    with pytest.raises(SolverError, match="boom"):
+        solver.warm_up()
+    solver.solve(Question(index=0, prompt="P1"))
+    assert "--conversation" not in seen_cmds[1]
+    assert "INSTRUKCJA SYSTEMOWA:" in seen_cmds[1][seen_cmds[1].index("-p") + 1]
+
+
+def test_warm_up_is_noop_for_transport_without_conversation() -> None:
+    transport = FakeTransport([])
+    assert Solver(_make_profile(), transport).warm_up() is False
+    assert transport.requests == []
+
+
+def test_solve_during_warm_up_waits_and_reset_discards_stale_conversation() -> None:
+    import threading
+
+    warm_started = threading.Event()
+    release_warm = threading.Event()
+    active = [0]
+    max_active = [0]
+    seen_cmds: list[list[str]] = []
+
+    class _BlockingPopen(_FakePopen):
+        def poll(self) -> int | None:
+            if not release_warm.is_set():
+                warm_started.set()
+                return None
+            return self.returncode
+
+    def fake_popen(cmd: list[str], **_kw: object) -> _FakePopen:
+        seen_cmds.append(list(cmd))
+        active[0] += 1
+        max_active[0] = max(max_active[0], active[0])
+        if len(seen_cmds) == 1:
+            proc: _FakePopen = _BlockingPopen(stdout=_agy_envelope("conv-old"))
+        else:
+            proc = _FakePopen(stdout=_agy_envelope("conv-new"))
+        original = proc.communicate
+
+        def _communicate() -> tuple[str, str]:
+            active[0] -= 1
+            return original()
+
+        proc.communicate = _communicate  # type: ignore[method-assign]
+        return proc
+
+    transport = AgyTransport(
+        agy_bin="agy", model="m", popen_fn=fake_popen, sleep_fn=lambda _s: None, poll_interval=0
+    )
+    solver = Solver(_make_profile(), transport)
+    warm = threading.Thread(target=lambda: solver.warm_up())
+    warm.start()
+    assert warm_started.wait(2)
+
+    solver.reset_session()  # Session invalidated while warming: stale id must be dropped.
+    solved: list[Answer] = []
+    solve = threading.Thread(target=lambda: solved.append(solver.solve(Question(index=0, prompt="P"))))
+    solve.start()
+    solve.join(0.2)
+    assert solve.is_alive()  # Waits for the warm-up instead of running agy in parallel.
+    release_warm.set()
+    warm.join(2)
+    solve.join(2)
+
+    assert solved and max_active[0] == 1
+    assert "--conversation" not in seen_cmds[1]
+
+
+def test_esc_cancels_both_warm_up_and_waiting_solve() -> None:
+    import threading
+
+    started = threading.Event()
+    cancellation = InMemoryCancellation()
+
+    class _BlockingPopen(_FakePopen):
+        def poll(self) -> int | None:
+            started.set()
+            return self.returncode if (self.terminated or self.killed) else None
+
+    procs: list[_FakePopen] = []
+
+    def fake_popen(_c: list[str], **_k: object) -> _FakePopen:
+        proc = _BlockingPopen(stdout=_agy_envelope("c"))
+        procs.append(proc)
+        return proc
+
+    transport = AgyTransport(
+        agy_bin="agy",
+        model="m",
+        cancellation=cancellation,
+        popen_fn=fake_popen,
+        sleep_fn=lambda _s: None,
+        poll_interval=0,
+    )
+    solver = Solver(_make_profile(), transport)
+    errors: list[BaseException] = []
+
+    def _warm() -> None:
+        try:
+            solver.warm_up()
+        except CancellationError as exc:
+            errors.append(exc)
+
+    warm = threading.Thread(target=_warm)
+    warm.start()
+    assert started.wait(2)
+    solve_errors: list[BaseException] = []
+
+    def _solve() -> None:
+        try:
+            solver.solve(Question(index=0, prompt="P"))
+        except CancellationError as exc:
+            solve_errors.append(exc)
+
+    solve = threading.Thread(target=_solve)
+    solve.start()
+    solve.join(0.1)
+    cancellation.trigger()
+    warm.join(2)
+    solve.join(2)
+    assert errors and solve_errors
+    assert len(procs) == 1 and procs[0].terminated

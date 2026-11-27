@@ -60,7 +60,8 @@ def format_answer(question: Question, answer: Answer) -> str:
 def format_question_card(event: QuestionAnswered, *, show_reasoning: bool) -> str:
     """Render a solved Question as a stream card text."""
     lines = [
-        f"Strona {event.page_number} · Pytanie {event.position}/{event.total}",
+        f"Strona {event.page_number} · Pytanie {event.position}/{event.total}"
+        f" ({event.elapsed_s:.0f} s)",
         f"Treść: {summarize_prompt(event.question.prompt)}",
         f"Odpowiedź: {format_answer(event.question, event.answer)}",
     ]
