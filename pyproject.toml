@@ -8,12 +8,14 @@ dependencies = [
     "python-dotenv",
     "google-genai",
     "rich",
+    "textual>=8",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest",
     "mypy",
+    "pytest-asyncio",
 ]
 
 [tool.pytest.ini_options]

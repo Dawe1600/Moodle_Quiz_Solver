@@ -4,12 +4,15 @@ import json
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
+from typing import cast
 
 import pytest
 
 import bot
 from moodle_quiz_solver.domain import Answer, Question
+from moodle_quiz_solver.exceptions import QuizPageError
 from moodle_quiz_solver.quiz_page import NavigationOutcome
+from moodle_quiz_solver.tui import TuiSession
 
 
 LEGACY_SYMBOLS = (
@@ -1254,3 +1257,63 @@ def test_cli_renderer_clear_runs_only_in_tty_and_status_subtitle_is_not_truncate
     tty_renderer.clear()
     assert cleared == [True]
 
+
+
+def _write_single_profile(tmp_path: Path) -> None:
+    (tmp_path / "profiles.json").write_text(
+        json.dumps(
+            {"matematyka": {"name": "Matematyka", "model": "m-1", "system_prompt": "Solve."}}
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_bot_main_routes_interactive_tty_to_textual_dashboard(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _write_single_profile(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("shutil.which", lambda name: "/usr/bin/agy" if name == "agy" else None)
+    monkeypatch.setattr(bot, "_stdio_is_tty", lambda: True)
+
+    def _forbid_browser(_start_url: str | None = None) -> Iterator[object]:
+        raise AssertionError("main must not open the browser itself in TUI mode")
+
+    monkeypatch.setattr(bot, "open_quiz_page", _forbid_browser)
+    sessions: list[TuiSession] = []
+
+    def _fake_run_tui(session: TuiSession) -> int:
+        sessions.append(session)
+        return 0
+
+    monkeypatch.setattr(bot, "run_tui", _fake_run_tui)
+
+    assert bot.main(["--profile", "matematyka", "--backend", "agy"]) == 0
+    assert len(sessions) == 1
+    assert sessions[0].selection.profile.key == "matematyka"
+    assert sessions[0].opener is cast(object, _forbid_browser)
+
+
+def test_bot_main_keeps_plain_cli_when_io_is_injected_even_on_tty(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _write_single_profile(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("shutil.which", lambda name: "/usr/bin/agy" if name == "agy" else None)
+    monkeypatch.setattr(bot, "_stdio_is_tty", lambda: True)
+
+    def _forbid_tui(_session: object) -> int:
+        raise AssertionError("TUI must not start for injected (non-TTY) I/O")
+
+    @contextmanager
+    def _closed_browser(_start_url: str | None = None) -> Iterator[object]:
+        raise QuizPageError("brak")
+        yield
+
+    monkeypatch.setattr(bot, "run_tui", _forbid_tui)
+    monkeypatch.setattr(bot, "open_quiz_page", _closed_browser)
+    logs: list[str] = []
+
+    assert bot.main([], input_fn=lambda _prompt: "q", output_fn=logs.append) == 0
