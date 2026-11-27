@@ -366,3 +366,110 @@ def test_run_auto_mode_suppresses_reasoning_when_show_reasoning_false() -> None:
 
 
 
+
+
+def test_run_auto_mode_emits_structured_events_in_order() -> None:
+    from moodle_quiz_solver.auto_mode import (
+        AutoModeEvent,
+        AutoModeStopped,
+        PageAnalysisStarted,
+        QuestionAnswered,
+        QuestionSolvingStarted,
+    )
+
+    q1 = Question(index=0, prompt="Q1?", question_type="radio", options=("A", "B"))
+    q2 = Question(index=1, prompt="Q2?", question_type="text")
+    q3 = Question(index=0, prompt="Q3?", question_type="radio", options=("X", "Y"))
+    quiz_page = _FakeQuizPage(pages=[[q1, q2], [q3]], outcomes=["next", "finished"])
+    transport = _FakeTransport(
+        [
+            '{"answer_type": "radio", "selected_indices": [1], "reasoning": "B is right"}',
+            '{"answer_type": "text", "text_answers": ["42"], "reasoning": "42"}',
+            '{"answer_type": "radio", "selected_indices": [0], "reasoning": "X is right"}',
+        ]
+    )
+    cancellation = _RecordingCancellation()
+    solver = Solver(profile=_profile(), transport=transport, cancellation=cancellation)
+    events: list[AutoModeEvent] = []
+    logs: list[str] = []
+
+    result = run_auto_mode(
+        quiz_page, solver, cancellation, output_fn=logs.append, event_fn=events.append
+    )
+
+    kinds = [type(e).__name__ for e in events]
+    assert kinds == [
+        "PageAnalysisStarted",
+        "QuestionSolvingStarted",
+        "QuestionAnswered",
+        "QuestionSolvingStarted",
+        "QuestionAnswered",
+        "PageAnalysisStarted",
+        "QuestionSolvingStarted",
+        "QuestionAnswered",
+        "AutoModeStopped",
+    ]
+    assert events[0] == PageAnalysisStarted(page_number=1)
+    assert events[5] == PageAnalysisStarted(page_number=2)
+    assert events[1] == QuestionSolvingStarted(page_number=1, position=1, total=2, question=q1)
+    answered = events[2]
+    assert isinstance(answered, QuestionAnswered)
+    assert answered.question == q1
+    assert answered.position == 1 and answered.total == 2 and answered.page_number == 1
+    assert answered.answer.selected_indices == (1,)
+    assert answered.answer.reasoning == "B is right"
+    assert events[-1] == AutoModeStopped(result=result)
+    assert any("Uzasadnienie AI: B is right" in line for line in logs)
+
+
+def test_run_auto_mode_emits_stop_summary_on_error_and_no_questions() -> None:
+    from moodle_quiz_solver.auto_mode import AutoModeEvent, AutoModeStopped
+
+    q1 = Question(index=0, prompt="Q1?", question_type="radio", options=("A", "B"))
+    quiz_page = _FakeQuizPage(pages=[[q1]], outcomes=["finished"])
+    cancellation = _RecordingCancellation()
+    solver = Solver(
+        profile=_profile(), transport=_FakeTransport(["not json"]), cancellation=cancellation
+    )
+    events: list[AutoModeEvent] = []
+
+    result = run_auto_mode(
+        quiz_page, solver, cancellation, output_fn=lambda _m: None, event_fn=events.append
+    )
+
+    assert result.stop_reason == "solver_error"
+    assert events[-1] == AutoModeStopped(result=result)
+    assert sum(isinstance(e, AutoModeStopped) for e in events) == 1
+
+    empty_events: list[AutoModeEvent] = []
+    empty_result = run_auto_mode(
+        _FakeQuizPage(pages=[], outcomes=[]),
+        solver,
+        cancellation,
+        output_fn=lambda _m: None,
+        event_fn=empty_events.append,
+    )
+    assert empty_result.stop_reason == "no_questions"
+    assert [type(e).__name__ for e in empty_events] == ["PageAnalysisStarted", "AutoModeStopped"]
+
+
+def test_run_auto_mode_output_unchanged_with_and_without_event_fn() -> None:
+    def run(with_events: bool) -> list[str]:
+        q1 = Question(index=0, prompt="Q1?", question_type="radio", options=("A", "B"))
+        quiz_page = _FakeQuizPage(pages=[[q1]], outcomes=["finished"])
+        transport = _FakeTransport(
+            ['{"answer_type": "radio", "selected_indices": [0], "reasoning": "why"}']
+        )
+        cancellation = _RecordingCancellation()
+        solver = Solver(profile=_profile(), transport=transport, cancellation=cancellation)
+        logs: list[str] = []
+        run_auto_mode(
+            quiz_page,
+            solver,
+            cancellation,
+            output_fn=logs.append,
+            event_fn=(lambda _e: None) if with_events else None,
+        )
+        return logs
+
+    assert run(True) == run(False)
