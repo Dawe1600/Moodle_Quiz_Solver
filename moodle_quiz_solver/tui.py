@@ -10,9 +10,10 @@ from __future__ import annotations
 
 import asyncio
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from contextlib import AbstractContextManager
 from dataclasses import dataclass, field, replace
+from pathlib import Path
 from typing import ClassVar, TypeVar
 
 from textual.app import App, ComposeResult
@@ -31,6 +32,7 @@ from moodle_quiz_solver.config import (
     collect_available_models,
     load_profiles,
     resolve_backend_switch,
+    save_profiles,
 )
 from moodle_quiz_solver.domain import BackendKind, SubjectProfile
 from moodle_quiz_solver.exceptions import ConfigurationError
@@ -52,15 +54,19 @@ from moodle_quiz_solver.tui_modals import (
     OptionsModal,
     TextInputModal,
 )
+from moodle_quiz_solver.tui_profile_editor import ProfileEdit, ProfileEditorModal, merge_profile_edit
 
 _T = TypeVar("_T")
 
 QuizPageOpener = Callable[[str | None], AbstractContextManager[QuizPage]]
 SolverBuilder = Callable[[RuntimeSelection, Cancellation], Solver]
 ProfilesLoader = Callable[[], dict[str, SubjectProfile]]
+ProfilesSaver = Callable[[Mapping[str, SubjectProfile]], Path]
 BackendResolver = Callable[[BackendKind, AppConfig], tuple[BackendKind, str | None]]
 
 _CUSTOM_MODEL = "__custom_model__"
+_EDIT_PROFILE = "__edit_profile__"
+_NEW_PROFILE = "__new_profile__"
 
 
 def _default_backend_resolver(
@@ -81,6 +87,8 @@ HELP_ENTRIES: tuple[tuple[str, str], ...] = (
     ("u", "Przejście pod adres URL quizu"),
     ("c", "Ponowne otwarcie zamkniętej przeglądarki"),
     ("l", "Przeładowanie profili z dysku"),
+    ("e", "Edycja aktywnego profilu przedmiotu i materiałów referencyjnych"),
+    ("n", "Nowy profil przedmiotu"),
     ("r", "Reset kontekstu AI"),
 )
 
@@ -96,6 +104,8 @@ class TuiSession:
     cancellation: InMemoryCancellation
     profiles_loader: ProfilesLoader = field(default=load_profiles)
     backend_resolver: BackendResolver = field(default=_default_backend_resolver)
+    profiles_saver: ProfilesSaver = field(default=save_profiles)
+    materials_root: Path = field(default_factory=Path.cwd)
 
 
 class SessionSidebar(Static):
@@ -168,6 +178,9 @@ class DashboardApp(App[int]):
         Binding("c", "reopen_browser", "Przeglądarka"),
         Binding("l", "reload_profiles", "Przeładuj"),
         Binding("r", "reset_context", "Reset AI"),
+        # Subject Profile editor (#18)
+        Binding("e", "edit_profile", "Edytuj profil"),
+        Binding("n", "new_profile", "Nowy profil"),
     ]
 
     DEFAULT_CSS = """
@@ -369,8 +382,15 @@ class DashboardApp(App[int]):
         sel = self._session.selection
         profiles = self._session.config.profiles
         choices = [(p.key, f"{p.name} ({p.key})") for p in profiles.values()]
+        choices += [(_EDIT_PROFILE, "Edytuj aktywny profil…"), (_NEW_PROFILE, "Nowy profil…")]
 
         def _chosen(key: str | None) -> None:
+            if key == _EDIT_PROFILE:
+                self.action_edit_profile()
+                return
+            if key == _NEW_PROFILE:
+                self.action_new_profile()
+                return
             if key is None or key not in profiles:
                 return
             profile = profiles[key]
@@ -524,6 +544,39 @@ class DashboardApp(App[int]):
                 f"usunięty; przełączono na: {profile.name} ({profile.key})."
             )
         self._apply_selection(replace(sel, profile=profile, model_override=None), note)
+
+    def action_edit_profile(self) -> None:
+        self._open_profile_editor(self._session.selection.profile)
+
+    def action_new_profile(self) -> None:
+        self._open_profile_editor(None)
+
+    def _open_profile_editor(self, profile: SubjectProfile | None) -> None:
+        editor = ProfileEditorModal(
+            profile,
+            existing_keys=self._session.config.profiles.keys(),
+            materials_root=self._session.materials_root,
+        )
+        self.push_screen(editor, self._apply_profile_edit)
+
+    def _apply_profile_edit(self, edit: ProfileEdit | None) -> None:
+        if edit is None:
+            return
+        profile = edit.profile
+        if edit.persist:
+            # Merge into the on-disk profiles so earlier session-only edits never leak to disk.
+            try:
+                on_disk = self._session.profiles_loader()
+                path = self._session.profiles_saver(merge_profile_edit(on_disk, edit))
+            except ConfigurationError as exc:
+                self.log_activity(f"BŁĄD: Nie udało się zapisać profili ({exc}). Zachowano poprzedni profil.")
+                return
+            note = f"Zapisano profil {profile.name} ({profile.key}) do {path.name}."
+        else:
+            note = f"Zastosowano profil {profile.name} ({profile.key}) tylko w tej sesji."
+        profiles = merge_profile_edit(self._session.config.profiles, edit)
+        self._session.config = replace(self._session.config, profiles=profiles)
+        self._apply_selection(replace(self._session.selection, profile=profile, model_override=None), note)
 
     def action_reset_context(self) -> None:
         self.solver.reset_session()

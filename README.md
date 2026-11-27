@@ -7,6 +7,7 @@ Uniwersalny asystent AI do rozwiązywania quizów na platformie Moodle (dowolny 
 - **Podpinanie materiałów źródłowych (PDF / MD / TXT):** Możesz wskazać wykłady lub notatki z dysku (np. z sejfu Obsidian), na których AI opiera odpowiedzi w pierwszej kolejności.
 - **Subskrypcja zamiast osobnego API (`agy CLI`):** Domyślnie używa `agy -p` (domyślny model `gemini-4-hydrogen-medium`) w trybie ustrukturyzowanego JSON-a i utrzymuje kontekst w ramach jednego quizu (`--conversation`), z opcją przełączenia na Google AI Studio API (`api`) bez wychodzenia z programu.
 - **Interaktywna konsola `rich`:** Czytelny panel statusu sesji, tryb krokowy (`s`/`step`), opcje sesji (`confirm_before_next`, `show_reasoning`) oraz odporne zarządzanie przeglądarką (`url`, `open`) w jednej sesji logowania Moodle.
+- **Pełnoekranowy panel `Textual` (TTY):** pasek stanu sesji, strumień trybu `AUTO` na żywo, okna wyboru profilu/silnika/modelu/opcji oraz edytor profili przedmiotów z wyborem materiałów referencyjnych z drzewa katalogów (architektura: [`docs/adr/0001`](docs/adr/0001-textual-tui-with-single-thread-browser-worker.md)).
 - **Pełna obsługa typów pytań Moodle:**
   - Jednokrotnego wyboru (`radio`) i wielokrotnego wyboru (`checkbox`) z bezpiecznym klikaniem przy wzorach MathJax
   - Pytania otwarte (`text` / `textarea`)
@@ -111,6 +112,13 @@ Plik `profiles.json` jest ignorowany przez Gita (`.gitignore`), żeby Twoje loka
    - **`r`** / **`reset`**: Resetuje pamięć rozmowy (`conversation_id` oraz cache materiałów) przed rozpoczęciem kolejnego quizu.
    - **`h`** / **`help`**: Wyświetla tabelę dostępnych komend.
    - **`q`** / **`quit`**: Zamyka przeglądarkę i kończy program.
+
+### Skróty panelu Textual (TTY)
+
+- **`Enter`** / **`a`**: tryb `AUTO` z podglądem kolejnych pytań na żywo; **`s`**: krok (tylko bieżąca strona); **`Esc`** lub przycisk **Zatrzymaj**: przerwanie trybu `AUTO`.
+- **`p`**: wybór profilu przedmiotu (lista zawiera też „Edytuj aktywny profil…” i „Nowy profil…”); **`b`**: silnik AI; **`m`**: model AI (także własny); **`o`**: opcje sesji (`confirm_before_next`, `show_reasoning`).
+- **`e`**: edycja aktywnego profilu przedmiotu; **`n`**: nowy profil. Edytor ma pola klucza, nazwy, modelu i instrukcji systemowej oraz drzewo katalogów do wskazywania materiałów referencyjnych (pole nad drzewem zmienia jego folder główny; Enter na pliku PDF/MD/TXT dodaje plik, na folderze – obsługiwane pliki leżące bezpośrednio w nim; `Delete` na liście usuwa materiał). Przycisk **Zapisz do profiles.json** zapisuje atomowo na dysk tylko edytowany profil (zmiany „tylko w sesji” nie trafiają do pliku), **Zastosuj tylko w sesji** zmienia profil wyłącznie w pamięci bieżącej sesji.
+- **`u`**: adres URL quizu; **`c`**: ponowne otwarcie przeglądarki; **`l`**: przeładowanie `profiles.json`; **`r`**: reset kontekstu AI; **`h`**: pomoc; **`q`**: wyjście.
 
 ### Opcjonalne flagi CLI
 
