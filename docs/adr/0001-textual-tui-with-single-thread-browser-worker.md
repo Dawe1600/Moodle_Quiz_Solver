@@ -5,7 +5,7 @@ Interactive sessions use a full-screen `Textual` TUI (status sidebar plus a scro
 ## Considered Options
 
 - **Keep the line-based `Rich` CLI only**: rejected; each screen clear loses earlier **Question**/**Answer** output and every action needs typing plus Enter.
-- **Switch the **Quiz Page** to Playwright's async API**: rejected for now; it would rewrite all of `QuizPage` and its tests for no user-visible gain over a dedicated worker thread.
+- **Switch `QuizPage` to Playwright's async API**: rejected for now; it would rewrite all of `QuizPage` and its tests for no user-visible gain over a dedicated worker thread.
 - **Parse `output_fn` text in the TUI**: rejected; it couples the UI to Polish log wording. Typed events are additive and leave `output_fn`/`status_fn` intact for the fallback.
 
 ## Consequences

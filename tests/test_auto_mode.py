@@ -5,7 +5,15 @@ from contextlib import contextmanager
 
 import pytest
 
-from moodle_quiz_solver.auto_mode import AutoModeResult, run_auto_mode
+from moodle_quiz_solver.auto_mode import (
+    AutoModeEvent,
+    AutoModeResult,
+    AutoModeStopped,
+    PageAnalysisStarted,
+    QuestionAnswered,
+    QuestionSolvingStarted,
+    run_auto_mode,
+)
 from moodle_quiz_solver.cancellation import InMemoryCancellation
 from moodle_quiz_solver.domain import Answer, Question, SubjectProfile
 from moodle_quiz_solver.exceptions import QuizPageError, SolverError
@@ -364,18 +372,7 @@ def test_run_auto_mode_suppresses_reasoning_when_show_reasoning_false() -> None:
     assert not any("Uzasadnienie AI:" in line for line in logs)
 
 
-
-
-
-
 def test_run_auto_mode_emits_structured_events_in_order() -> None:
-    from moodle_quiz_solver.auto_mode import (
-        AutoModeEvent,
-        AutoModeStopped,
-        PageAnalysisStarted,
-        QuestionAnswered,
-        QuestionSolvingStarted,
-    )
 
     q1 = Question(index=0, prompt="Q1?", question_type="radio", options=("A", "B"))
     q2 = Question(index=1, prompt="Q2?", question_type="text")
@@ -397,17 +394,16 @@ def test_run_auto_mode_emits_structured_events_in_order() -> None:
         quiz_page, solver, cancellation, output_fn=logs.append, event_fn=events.append
     )
 
-    kinds = [type(e).__name__ for e in events]
-    assert kinds == [
-        "PageAnalysisStarted",
-        "QuestionSolvingStarted",
-        "QuestionAnswered",
-        "QuestionSolvingStarted",
-        "QuestionAnswered",
-        "PageAnalysisStarted",
-        "QuestionSolvingStarted",
-        "QuestionAnswered",
-        "AutoModeStopped",
+    assert [type(e) for e in events] == [
+        PageAnalysisStarted,
+        QuestionSolvingStarted,
+        QuestionAnswered,
+        QuestionSolvingStarted,
+        QuestionAnswered,
+        PageAnalysisStarted,
+        QuestionSolvingStarted,
+        QuestionAnswered,
+        AutoModeStopped,
     ]
     assert events[0] == PageAnalysisStarted(page_number=1)
     assert events[5] == PageAnalysisStarted(page_number=2)
@@ -422,8 +418,7 @@ def test_run_auto_mode_emits_structured_events_in_order() -> None:
     assert any("Uzasadnienie AI: B is right" in line for line in logs)
 
 
-def test_run_auto_mode_emits_stop_summary_on_error_and_no_questions() -> None:
-    from moodle_quiz_solver.auto_mode import AutoModeEvent, AutoModeStopped
+def test_run_auto_mode_emits_single_stop_summary_on_solver_error() -> None:
 
     q1 = Question(index=0, prompt="Q1?", question_type="radio", options=("A", "B"))
     quiz_page = _FakeQuizPage(pages=[[q1]], outcomes=["finished"])
@@ -441,6 +436,10 @@ def test_run_auto_mode_emits_stop_summary_on_error_and_no_questions() -> None:
     assert events[-1] == AutoModeStopped(result=result)
     assert sum(isinstance(e, AutoModeStopped) for e in events) == 1
 
+
+def test_run_auto_mode_emits_stop_summary_when_no_questions_found() -> None:
+    cancellation = _RecordingCancellation()
+    solver = Solver(profile=_profile(), transport=_FakeTransport([]), cancellation=cancellation)
     empty_events: list[AutoModeEvent] = []
     empty_result = run_auto_mode(
         _FakeQuizPage(pages=[], outcomes=[]),
@@ -450,7 +449,7 @@ def test_run_auto_mode_emits_stop_summary_on_error_and_no_questions() -> None:
         event_fn=empty_events.append,
     )
     assert empty_result.stop_reason == "no_questions"
-    assert [type(e).__name__ for e in empty_events] == ["PageAnalysisStarted", "AutoModeStopped"]
+    assert [type(e) for e in empty_events] == [PageAnalysisStarted, AutoModeStopped]
 
 
 def test_run_auto_mode_output_unchanged_with_and_without_event_fn() -> None:

@@ -65,7 +65,7 @@ class QuestionAnswered:
 
 @dataclass(frozen=True, slots=True)
 class AutoModeStopped:
-    """Auto Mode stopped; always the last event emitted by a run."""
+    """Auto Mode stopped with a result; the last event of every run that returns normally."""
 
     result: AutoModeResult
 
@@ -185,7 +185,7 @@ def _run(
                     )
 
                 cancellation.raise_if_cancelled()
-                if max_pages is not None and pages_completed + 1 >= max_pages:
+                if max_pages is not None and page_number >= max_pages:
                     pages_completed += 1
                     output_fn("Zakończono bieżącą stronę bez przejścia dalej.")
                     return AutoModeResult(
