@@ -8,6 +8,9 @@ import pytest
 from moodle_quiz_solver.config import load_config, select_runtime
 from moodle_quiz_solver.exceptions import ConfigurationError
 
+TEST_MOODLE_URL = "https://moodle.test/login/index.php"
+BASE_ENV = {"MOODLE_URL": TEST_MOODLE_URL}
+
 
 def test_missing_profiles_file_falls_back_to_builtin_ogolny_matching_example(
     tmp_path: Path,
@@ -18,7 +21,7 @@ def test_missing_profiles_file_falls_back_to_builtin_ogolny_matching_example(
     config = load_config(
         profiles_path=tmp_path / "nonexistent_profiles.json",
         env_path=tmp_path / ".env",
-        env={},
+        env=BASE_ENV,
         cli_args=[],
     )
 
@@ -50,7 +53,7 @@ def test_valid_profiles_json_loads_with_optional_defaults(tmp_path: Path) -> Non
     config = load_config(
         profiles_path=profiles_file,
         env_path=tmp_path / ".env",
-        env={},
+        env=BASE_ENV,
         cli_args=[],
     )
 
@@ -107,7 +110,7 @@ def test_invalid_profiles_json_raises_configuration_error(
         load_config(
             profiles_path=profiles_file,
             env_path=tmp_path / ".env",
-            env={},
+            env=BASE_ENV,
             cli_args=[],
         )
 
@@ -127,7 +130,7 @@ def test_invalid_profiles_json_raises_configuration_error(
 def test_gemini_api_key_normalization(
     tmp_path: Path, raw_key: str | None, expected: str | None
 ) -> None:
-    env = {} if raw_key is None else {"GEMINI_API_KEY": raw_key}
+    env = BASE_ENV if raw_key is None else {**BASE_ENV, "GEMINI_API_KEY": raw_key}
 
     config = load_config(
         profiles_path=tmp_path / "missing.json",
@@ -160,17 +163,29 @@ def test_loads_dotenv_from_tmp_path_when_env_not_injected(
     assert config.moodle_url == "https://moodle.example.edu/login"
 
 
-def test_moodle_url_precedence_cli_over_env_over_default(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "env",
+    [
+        {},
+        {"MOODLE_URL": "   "},
+        {"MOODLE_URL": "https://moodle.twoja-uczelnia.pl/login/index.php"},
+    ],
+)
+def test_missing_or_placeholder_moodle_url_raises_configuration_error(
+    tmp_path: Path, env: dict[str, str]
+) -> None:
+    with pytest.raises(ConfigurationError, match="MOODLE_URL"):
+        load_config(
+            profiles_path=tmp_path / "missing.json",
+            env_path=tmp_path / ".env",
+            env=env,
+            cli_args=[],
+        )
+
+
+def test_moodle_url_precedence_cli_over_env(tmp_path: Path) -> None:
     missing_profiles = tmp_path / "missing.json"
     missing_env = tmp_path / ".env"
-
-    default_cfg = load_config(
-        profiles_path=missing_profiles,
-        env_path=missing_env,
-        env={},
-        cli_args=[],
-    )
-    assert default_cfg.moodle_url == "https://moodle2.e-wsb.pl/login/index.php"
 
     env_cfg = load_config(
         profiles_path=missing_profiles,
@@ -193,7 +208,7 @@ def test_cli_flags_parse_profile_backend_and_url(tmp_path: Path) -> None:
     config = load_config(
         profiles_path=tmp_path / "missing.json",
         env_path=tmp_path / ".env",
-        env={},
+        env=BASE_ENV,
         cli_args=["--profile", "ogolny", "--backend", "api", "--url", "https://custom.test"],
     )
 
@@ -207,7 +222,7 @@ def test_invalid_backend_cli_flag_raises_configuration_error(tmp_path: Path) -> 
         load_config(
             profiles_path=tmp_path / "missing.json",
             env_path=tmp_path / ".env",
-            env={},
+            env=BASE_ENV,
             cli_args=["--backend", "unknown"],
         )
 
@@ -226,7 +241,7 @@ def test_select_runtime_uses_cli_profile_and_backend_without_prompts(tmp_path: P
     config = load_config(
         profiles_path=profiles_file,
         env_path=tmp_path / ".env",
-        env={"GEMINI_API_KEY": "AIzaRealKey"},
+        env={**BASE_ENV, "GEMINI_API_KEY": "AIzaRealKey"},
         cli_args=["--profile", "math", "--backend", "agy"],
     )
 
@@ -245,7 +260,7 @@ def test_select_runtime_uses_cli_profile_and_backend_without_prompts(tmp_path: P
     assert selection.agy_bin == "/usr/bin/agy"
     assert selection.profile_key == "math"
     assert selection.profile.model == "m2"
-    assert selection.moodle_url == "https://moodle2.e-wsb.pl/login/index.php"
+    assert selection.moodle_url == TEST_MOODLE_URL
     assert selection.gemini_api_key == "AIzaRealKey"
 
 
@@ -275,7 +290,7 @@ def test_select_runtime_resolves_default_backend_and_first_profile_without_promp
     config = load_config(
         profiles_path=profiles_file,
         env_path=tmp_path / ".env",
-        env={"GEMINI_API_KEY": "AIzaRealKey"},
+        env={**BASE_ENV, "GEMINI_API_KEY": "AIzaRealKey"},
         cli_args=[],
     )
 
@@ -299,7 +314,7 @@ def test_select_runtime_autodetects_single_available_backend(tmp_path: Path) -> 
     config = load_config(
         profiles_path=tmp_path / "missing.json",
         env_path=tmp_path / ".env",
-        env={"GEMINI_API_KEY": "AIzaRealKey"},
+        env={**BASE_ENV, "GEMINI_API_KEY": "AIzaRealKey"},
         cli_args=["--profile", "ogolny"],
     )
 
@@ -319,7 +334,7 @@ def test_select_runtime_raises_on_unknown_profile(tmp_path: Path) -> None:
     config = load_config(
         profiles_path=tmp_path / "missing.json",
         env_path=tmp_path / ".env",
-        env={},
+        env=BASE_ENV,
         cli_args=["--profile", "nonexistent", "--backend", "agy"],
     )
 
@@ -336,7 +351,7 @@ def test_select_runtime_raises_when_requested_backend_unavailable(tmp_path: Path
     config_no_agy = load_config(
         profiles_path=tmp_path / "missing.json",
         env_path=tmp_path / ".env",
-        env={},
+        env=BASE_ENV,
         cli_args=["--profile", "ogolny", "--backend", "agy"],
     )
     with pytest.raises(ConfigurationError, match="agy"):
@@ -350,7 +365,7 @@ def test_select_runtime_raises_when_requested_backend_unavailable(tmp_path: Path
     config_no_key = load_config(
         profiles_path=tmp_path / "missing.json",
         env_path=tmp_path / ".env",
-        env={"GEMINI_API_KEY": "twoj_klucz_z_google_ai_studio"},
+        env={**BASE_ENV, "GEMINI_API_KEY": "twoj_klucz_z_google_ai_studio"},
         cli_args=["--profile", "ogolny", "--backend", "api"],
     )
     with pytest.raises(ConfigurationError, match="GEMINI_API_KEY"):
@@ -366,7 +381,7 @@ def test_select_runtime_raises_when_no_backend_available(tmp_path: Path) -> None
     config = load_config(
         profiles_path=tmp_path / "missing.json",
         env_path=tmp_path / ".env",
-        env={},
+        env=BASE_ENV,
         cli_args=["--profile", "ogolny"],
     )
 
@@ -399,7 +414,7 @@ def test_empty_optional_list_item_raises_configuration_error(tmp_path: Path) -> 
         load_config(
             profiles_path=profiles_file,
             env_path=tmp_path / ".env",
-            env={},
+            env=BASE_ENV,
             cli_args=[],
         )
 
@@ -409,7 +424,7 @@ def test_empty_cli_url_raises_configuration_error(tmp_path: Path) -> None:
         load_config(
             profiles_path=tmp_path / "missing.json",
             env_path=tmp_path / ".env",
-            env={},
+            env=BASE_ENV,
             cli_args=["--url", "   "],
         )
 
@@ -420,7 +435,7 @@ def test_select_runtime_unknown_cli_profile_fails_before_backend_prompt(
     config = load_config(
         profiles_path=tmp_path / "missing.json",
         env_path=tmp_path / ".env",
-        env={"GEMINI_API_KEY": "AIzaRealKey"},
+        env={**BASE_ENV, "GEMINI_API_KEY": "AIzaRealKey"},
         cli_args=["--profile", "unknown_subject"],
     )
 
@@ -513,7 +528,7 @@ def test_resolve_backend_switch_validates_availability_with_polish_errors(
     no_key_config = load_config(
         profiles_path=tmp_path / "missing.json",
         env_path=tmp_path / ".env",
-        env={},
+        env=BASE_ENV,
         cli_args=[],
     )
 
@@ -526,7 +541,7 @@ def test_resolve_backend_switch_validates_availability_with_polish_errors(
     with_key_config = load_config(
         profiles_path=tmp_path / "missing.json",
         env_path=tmp_path / ".env",
-        env={"GEMINI_API_KEY": "AIzaRealKey"},
+        env={**BASE_ENV, "GEMINI_API_KEY": "AIzaRealKey"},
         cli_args=[],
     )
     with pytest.raises(ConfigurationError, match="google-genai"):

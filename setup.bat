@@ -21,7 +21,8 @@ echo ========================================================
 echo Konfiguracja zakonczona sukcesem!
 echo ========================================================
 echo Domyslny silnik: agy CLI (subskrypcja Antigravity).
-echo Opcjonalnie (dla fallbacku API): skopiuj .env.example do .env i wpisz GEMINI_API_KEY.
+echo Wymagane: skopiuj .env.example do .env i ustaw MOODLE_URL (adres logowania Moodle Twojej uczelni).
+echo Opcjonalnie (dla fallbacku API): wpisz w .env GEMINI_API_KEY.
 echo.
 echo Aby uruchomic bota, wpisz w konsoli:
 echo call venv\Scripts\activate.bat

@@ -22,7 +22,7 @@ from moodle_quiz_solver.domain import (
 )
 from moodle_quiz_solver.exceptions import ConfigurationError
 
-DEFAULT_MOODLE_URL = "https://moodle2.e-wsb.pl/login/index.php"
+MOODLE_URL_PLACEHOLDER_MARKER = "twoja-uczelnia"
 DEFAULT_AGY_MODEL = "gemini-4-hydrogen-medium"
 
 BUILTIN_OGOLNY_PROFILE = SubjectProfile(
@@ -238,10 +238,12 @@ def _resolve_moodle_url(cli_url: str | None, env: Mapping[str, str]) -> str:
         if not stripped:
             raise ConfigurationError("CLI flag '--url' must not be empty.")
         return stripped
-    env_url = env.get("MOODLE_URL")
-    if env_url is not None and env_url.strip():
-        return env_url.strip()
-    return DEFAULT_MOODLE_URL
+    env_url = (env.get("MOODLE_URL") or "").strip()
+    if env_url and MOODLE_URL_PLACEHOLDER_MARKER not in env_url:
+        return env_url
+    raise ConfigurationError(
+        "Brak adresu Moodle: ustaw MOODLE_URL w .env albo podaj --url."
+    )
 
 
 def load_config(

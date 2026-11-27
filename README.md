@@ -76,10 +76,11 @@ Plik `profiles.json` jest ignorowany przez Gita (`.gitignore`), żeby Twoje loka
 
 ---
 
-## 3. Konfiguracja silnika AI
+## 3. Konfiguracja adresu Moodle i silnika AI
 
+- **Adres Moodle (wymagany):** Skopiuj `.env.example` do `.env` i ustaw `MOODLE_URL` na adres strony logowania Moodle Twojej uczelni (np. `https://moodle.twoja-uczelnia.pl/login/index.php`). Zamiast tego możesz podać adres flagą `--url`. Bez adresu bot nie wystartuje.
 - **Opcja A: `agy CLI` (domyślna, z subskrypcji):** Jeśli masz zainstalowane i zalogowane `agy` w systemowym `PATH`, silnik zostanie wybrany automatycznie przy starcie bez dodatkowych pytań.
-- **Opcja B: Google AI Studio API (opcjonalny fallback):** Skopiuj `.env.example` do `.env` i wpisz swój klucz `GEMINI_API_KEY`. Jeśli `agy` nie jest dostępne w `PATH` (lub wymusisz `--backend api`), bot automatycznie użyje API.
+- **Opcja B: Google AI Studio API (opcjonalny fallback):** Wpisz w `.env` swój klucz `GEMINI_API_KEY`. Jeśli `agy` nie jest dostępne w `PATH` (lub wymusisz `--backend api`), bot automatycznie użyje API.
 
 ---
 
@@ -127,7 +128,7 @@ Plik `profiles.json` jest ignorowany przez Gita (`.gitignore`), żeby Twoje loka
 Możesz nadpisać domyślny profil, silnik lub adres logowania Moodle przy starcie:
 
 ```powershell
-python bot.py --profile matematyka --backend agy --url https://moodle2.e-wsb.pl/login/index.php
+python bot.py --profile matematyka --backend agy --url https://moodle.twoja-uczelnia.pl/login/index.php
 ```
 
 - `--profile <klucz>`: Klucz profilu z `profiles.json` (np. `ogolny`).
