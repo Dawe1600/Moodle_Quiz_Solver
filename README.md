@@ -1,6 +1,8 @@
-# Moodle Quiz Solver
+# Moodle LLM Harness
 
-Uniwersalny asystent AI do rozwiązywania quizów na platformie Moodle (dowolny przedmiot). Skrypt korzysta z biblioteki **Playwright** do obsługi przeglądarki, a jako silnik AI domyślnie wykorzystuje **Antigravity CLI (`agy`)** na Twojej subskrypcji (z opcjonalnym fallbackiem na Google AI Studio API).
+> ⚠️ **Zastrzeżenie:** projekt powstał w celach badawczo-edukacyjnych. Nie służy do oszukiwania na ocenianych sprawdzianach ani egzaminach. Używaj go wyłącznie na quizach ćwiczebnych, własnych instancjach Moodle lub za wyraźną zgodą prowadzącego. Szczegóły w sekcji [Zastrzeżenie prawne](#zastrzeżenie-prawne).
+
+**Moodle LLM Harness** to harness AI (LLM + Playwright) do rozwiązywania quizów na platformie Moodle, rozwijany jako projekt badawczo-edukacyjny: pokazuje, jak zbudować wokół modelu językowego warstwę automatyzacji przeglądarki, ustrukturyzowanych odpowiedzi i zarządzania kontekstem oraz jak modele radzą sobie z pytaniami testowymi. Działa z dowolnym przedmiotem. Skrypt korzysta z biblioteki **Playwright** do obsługi przeglądarki, a jako silnik AI domyślnie wykorzystuje **Antigravity CLI (`agy`)** na Twojej subskrypcji (z opcjonalnym fallbackiem na Google AI Studio API).
 
 ## Cechy projektu
 - **Uniwersalne profile przedmiotowe (`profiles.json`):** Wybór i przełączanie przedmiotu na żywo (np. Ogólny, Probabilistyka i Statystyka, Matematyka, Sieci Komputerowe / IT) z dedykowanym promptem systemowym i modelem, a także edycja/tworzenie profili bezpośrednio z CLI.
@@ -23,14 +25,14 @@ Sklonuj repozytorium i uruchom skrypt instalacyjny, który utworzy `venv`, zains
 
 - **Windows (CMD / PowerShell):**
   ```powershell
-  git clone https://github.com/Dawe1600/Moodle_Quiz_Solver.git
-  cd Moodle_Quiz_Solver
+  git clone https://github.com/Dawe1600/moodle-llm-harness.git
+  cd moodle-llm-harness
   .\setup.bat
   ```
 - **Linux / macOS:**
   ```bash
-  git clone https://github.com/Dawe1600/Moodle_Quiz_Solver.git
-  cd Moodle_Quiz_Solver
+  git clone https://github.com/Dawe1600/moodle-llm-harness.git
+  cd moodle-llm-harness
   chmod +x setup.sh
   ./setup.sh
   ```
@@ -143,3 +145,27 @@ pip install -e ".[dev]"
 python -m pytest
 python -m mypy --strict
 ```
+
+---
+
+## Zastrzeżenie prawne
+
+Moodle LLM Harness jest projektem badawczo-edukacyjnym. Jego celem jest pokazanie, jak budować warstwę automatyzacji (Playwright) i integracji z modelami językowymi wokół realnej platformy e-learningowej oraz jak modele radzą sobie z pytaniami testowymi.
+
+**Dozwolone zastosowania** to w szczególności:
+- quizy ćwiczebne, próbne i nieoceniane,
+- własne lub testowe instancje Moodle,
+- sprawdzanie i testowanie quizów przez prowadzących kursy,
+- każde inne użycie za wyraźną zgodą prowadzącego lub uczelni.
+
+**Niedozwolone** jest używanie narzędzia podczas ocenianych sprawdzianów, kolokwiów i egzaminów bez takiej zgody.
+
+Użytkownik ponosi wyłączną odpowiedzialność za korzystanie z narzędzia zgodnie z regulaminem swojej uczelni, zasadami uczciwości akademickiej oraz regulaminem danej platformy Moodle. Autor nie ponosi odpowiedzialności za sposób użycia oprogramowania ani za jego skutki.
+
+Odpowiedzi generowane przez AI mogą być błędne lub niepełne, więc nie należy na nich polegać bez samodzielnej weryfikacji.
+
+---
+
+## Licencja
+
+Projekt jest udostępniony na licencji MIT. Pełny tekst znajduje się w pliku [`LICENSE`](LICENSE).

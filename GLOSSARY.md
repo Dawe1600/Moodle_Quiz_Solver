@@ -1,8 +1,12 @@
-# Moodle Quiz Solver
+# Moodle LLM Harness
 
 Domain language for automating Moodle quiz attempts with subject-specific reference materials and AI-assisted answering.
 
 ## Language
+
+**Harness**:
+The layer wrapped around the LLM — Subject Profiles, system prompt, structured JSON Answers, conversation context, and browser control — that turns a model into a Moodle quiz-solving tool.
+_Avoid_: Wrapper, bot framework
 
 **Subject Profile**:
 A named subject configuration specifying model preferences, system instructions, and Reference Materials for a quiz session.
