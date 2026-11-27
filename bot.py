@@ -618,6 +618,7 @@ def main(
         return 1
 
     if use_tui:
+        assert isinstance(cancellation, InMemoryCancellation)
         return run_tui(
             TuiSession(
                 config=config,

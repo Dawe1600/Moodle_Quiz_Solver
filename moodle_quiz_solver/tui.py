@@ -19,14 +19,23 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding, BindingType
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
-from textual.widgets import Footer, Static
+from textual.widgets import Button, Footer, Static
 
 from moodle_quiz_solver.browser_worker import BrowserWorker, WorkerQuizPage
-from moodle_quiz_solver.cancellation import Cancellation
+from moodle_quiz_solver.auto_mode import AutoModeEvent, AutoModeStopped, PageAnalysisStarted, QuestionAnswered
+from moodle_quiz_solver.cancellation import Cancellation, InMemoryCancellation
 from moodle_quiz_solver.cli_ui import format_active_flags, format_toggle_label
 from moodle_quiz_solver.config import AppConfig, RuntimeSelection
 from moodle_quiz_solver.quiz_page import QuizPage
 from moodle_quiz_solver.solver import Solver
+from moodle_quiz_solver.tui_stream import (
+    IDLE_PROGRESS,
+    AutoModeRunner,
+    ProgressIndicator,
+    format_progress,
+    format_question_card,
+    format_summary,
+)
 
 _T = TypeVar("_T")
 
@@ -34,9 +43,12 @@ QuizPageOpener = Callable[[str | None], AbstractContextManager[QuizPage]]
 SolverBuilder = Callable[[RuntimeSelection, Cancellation], Solver]
 
 HELP_ENTRIES: tuple[tuple[str, str], ...] = (
+    ("Enter/a", "Tryb AUTO – rozwiązuje kolejne strony quizu"),
+    ("s", "Krok – rozwiązuje tylko bieżącą stronę quizu"),
+    ("Esc", "Zatrzymaj tryb AUTO (również przycisk Stop)"),
     ("h", "Pomoc – lista skrótów klawiszowych"),
     ("q", "Wyjście – zamyka przeglądarkę i kończy sesję"),
-    ("Esc", "Zamyka okno pomocy"),
+    ("Esc", "Zamyka okno pomocy (w oknie pomocy)"),
 )
 
 
@@ -48,7 +60,7 @@ class TuiSession:
     selection: RuntimeSelection
     opener: QuizPageOpener
     solver_builder: SolverBuilder
-    cancellation: Cancellation
+    cancellation: InMemoryCancellation
 
 
 class SessionSidebar(Static):
@@ -91,7 +103,7 @@ class HelpScreen(ModalScreen[None]):
     """
 
     def compose(self) -> ComposeResult:
-        body = "\n".join(f"{key:>4}  {desc}" for key, desc in HELP_ENTRIES)
+        body = "\n".join(f"{key:>7}  {desc}" for key, desc in HELP_ENTRIES)
         with Vertical():
             yield Static("Pomoc – skróty klawiszowe", id="help-title")
             yield Static(body, id="help-body", markup=False)
@@ -108,12 +120,19 @@ class DashboardApp(App[int]):
     BINDINGS: ClassVar[list[BindingType]] = [
         Binding("h", "help", "Pomoc"),
         Binding("q", "quit_session", "Wyjście"),
+        # Auto Mode stream (#16)
+        Binding("enter,a", "auto_mode", "Tryb AUTO"),
+        Binding("s", "step_mode", "Krok"),
+        Binding("escape", "stop_auto", "Stop"),
     ]
 
     DEFAULT_CSS = """
     #sidebar { width: 38; border: round $accent; padding: 0 1; }
     #activity { border: round $primary; padding: 0 1; }
     .entry { margin-bottom: 1; }
+    #run-bar { height: auto; }
+    #progress { width: 1fr; padding: 0 1; }
+    #stop { min-width: 10; }
     """
 
     def __init__(self, session: TuiSession, *, worker: BrowserWorker | None = None) -> None:
@@ -129,11 +148,19 @@ class DashboardApp(App[int]):
         self.confirm_before_next = False
         self.show_reasoning = True
         self.solver = session.solver_builder(session.selection, session.cancellation)
+        self._runner = AutoModeRunner(self, session.cancellation, self._on_auto_event)
+        self._pages_before_run = 0
 
     def compose(self) -> ComposeResult:
         with Horizontal():
             yield SessionSidebar(id="sidebar")
-            yield ActivityStream(id="activity")
+            with Vertical():
+                with Horizontal(id="run-bar"):
+                    yield ProgressIndicator(IDLE_PROGRESS, id="progress")
+                    stop = Button("Stop", id="stop", variant="error", disabled=True)
+                    stop.can_focus = False
+                    yield stop
+                yield ActivityStream(id="activity")
         yield Footer()
 
     def on_mount(self) -> None:
@@ -214,14 +241,76 @@ class DashboardApp(App[int]):
             self._worker.shutdown()
             self._worker_closed = True
 
+    @property
+    def auto_running(self) -> bool:
+        """Return True while Auto Mode or step mode is running."""
+        return self._runner.running
+
+    def action_auto_mode(self) -> None:
+        self._start_run(step=False)
+
+    def action_step_mode(self) -> None:
+        self._start_run(step=True)
+
+    def action_stop_auto(self) -> None:
+        if self._runner.running:
+            self._runner.stop()
+            self.query_one(ProgressIndicator).update("Zatrzymywanie...")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "stop":
+            self.action_stop_auto()
+
+    def _start_run(self, *, step: bool) -> None:
+        if self._runner.running:
+            return
+        page = self._page
+        if page is None:
+            self.log_activity("Przeglądarka jest zamknięta. Nie można uruchomić trybu AUTO.")
+            return
+        self._session.cancellation.reset()
+        self._runner.running = True
+        self._pages_before_run = self.pages_solved
+        self.query_one("#stop", Button).disabled = False
+        self.log_activity("Krok: bieżąca strona quizu." if step else "Start trybu AUTO.")
+        solver = self.solver
+        confirm = self.confirm_before_next
+        reasoning = self.show_reasoning
+        self.run_worker(
+            lambda: self._runner.run_blocking(
+                page, solver, step=step, confirm_before_next=confirm, show_reasoning=reasoning
+            ),
+            thread=True,
+            group="auto",
+        )
+
+    def _on_auto_event(self, event: AutoModeEvent) -> None:
+        progress = self.query_one(ProgressIndicator)
+        if isinstance(event, AutoModeStopped):
+            self.pages_solved = self._pages_before_run + event.result.pages_completed
+            self.log_activity(format_summary(event.result))
+            progress.update(IDLE_PROGRESS)
+            self.query_one("#stop", Button).disabled = True
+            self._runner.running = False
+        else:
+            progress.update(format_progress(event))
+            if isinstance(event, PageAnalysisStarted):
+                self.pages_solved = self._pages_before_run + event.page_number - 1
+            elif isinstance(event, QuestionAnswered):
+                self.questions_solved += 1
+                self.log_activity(format_question_card(event, show_reasoning=self.show_reasoning))
+        self.refresh_sidebar()
+
     def action_help(self) -> None:
         self.push_screen(HelpScreen())
 
     async def action_quit_session(self) -> None:
+        self._runner.stop()
         await asyncio.to_thread(self._close_browser_blocking)
         self.exit(0)
 
     def on_unmount(self) -> None:
+        self._runner.stop()
         self._close_browser_blocking()
 
 
