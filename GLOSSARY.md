@@ -35,3 +35,7 @@ _Avoid_: AI handler, backend
 **Auto Mode**:
 The continuous solving loop that resolves every Question on the current Quiz Page and advances until the final submission screen or user interruption.
 _Avoid_: Batch mode, daemon
+
+**Session Warm-up**:
+Preparing the conversation with the model before the first Question by loading the Subject Profile and its Reference Materials, so later Questions do not need to supply them again.
+_Avoid_: Preload, cache
