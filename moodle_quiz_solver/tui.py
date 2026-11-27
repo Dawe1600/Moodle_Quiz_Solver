@@ -12,7 +12,7 @@ import asyncio
 import threading
 from collections.abc import Callable
 from contextlib import AbstractContextManager
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from typing import ClassVar, TypeVar
 
 from textual.app import App, ComposeResult
@@ -25,7 +25,15 @@ from moodle_quiz_solver.browser_worker import BrowserWorker, WorkerQuizPage
 from moodle_quiz_solver.auto_mode import AutoModeEvent, AutoModeStopped, PageAnalysisStarted, QuestionAnswered
 from moodle_quiz_solver.cancellation import Cancellation, InMemoryCancellation
 from moodle_quiz_solver.cli_ui import format_active_flags, format_toggle_label
-from moodle_quiz_solver.config import AppConfig, RuntimeSelection
+from moodle_quiz_solver.config import (
+    AppConfig,
+    RuntimeSelection,
+    collect_available_models,
+    load_profiles,
+    resolve_backend_switch,
+)
+from moodle_quiz_solver.domain import BackendKind, SubjectProfile
+from moodle_quiz_solver.exceptions import ConfigurationError
 from moodle_quiz_solver.quiz_page import QuizPage
 from moodle_quiz_solver.solver import Solver
 from moodle_quiz_solver.tui_stream import (
@@ -36,11 +44,29 @@ from moodle_quiz_solver.tui_stream import (
     format_question_card,
     format_summary,
 )
+from moodle_quiz_solver.tui_modals import (
+    OPTION_CONFIRM_BEFORE_NEXT,
+    OPTION_LABELS,
+    OPTION_SHOW_REASONING,
+    ChoiceModal,
+    OptionsModal,
+    TextInputModal,
+)
 
 _T = TypeVar("_T")
 
 QuizPageOpener = Callable[[str | None], AbstractContextManager[QuizPage]]
 SolverBuilder = Callable[[RuntimeSelection, Cancellation], Solver]
+ProfilesLoader = Callable[[], dict[str, SubjectProfile]]
+BackendResolver = Callable[[BackendKind, AppConfig], tuple[BackendKind, str | None]]
+
+_CUSTOM_MODEL = "__custom_model__"
+
+
+def _default_backend_resolver(
+    target: BackendKind, config: AppConfig
+) -> tuple[BackendKind, str | None]:
+    return resolve_backend_switch(target, config)
 
 HELP_ENTRIES: tuple[tuple[str, str], ...] = (
     ("Enter/a", "Tryb AUTO – rozwiązuje kolejne strony quizu"),
@@ -48,6 +74,14 @@ HELP_ENTRIES: tuple[tuple[str, str], ...] = (
     ("Esc", "Zatrzymaj tryb AUTO (również przycisk Zatrzymaj); w oknie pomocy: zamknij"),
     ("h", "Pomoc – lista skrótów klawiszowych"),
     ("q", "Wyjście – zamyka przeglądarkę i kończy sesję"),
+    ("p", "Zmiana profilu przedmiotu"),
+    ("b", "Zmiana silnika AI"),
+    ("m", "Zmiana modelu AI (także własny model)"),
+    ("o", "Opcje sesji"),
+    ("u", "Przejście pod adres URL quizu"),
+    ("c", "Ponowne otwarcie zamkniętej przeglądarki"),
+    ("l", "Przeładowanie profili z dysku"),
+    ("r", "Reset kontekstu AI"),
 )
 
 
@@ -60,6 +94,8 @@ class TuiSession:
     opener: QuizPageOpener
     solver_builder: SolverBuilder
     cancellation: InMemoryCancellation
+    profiles_loader: ProfilesLoader = field(default=load_profiles)
+    backend_resolver: BackendResolver = field(default=_default_backend_resolver)
 
 
 class SessionSidebar(Static):
@@ -123,6 +159,15 @@ class DashboardApp(App[int]):
         Binding("enter,a", "auto_mode", "Tryb AUTO"),
         Binding("s", "step_mode", "Krok"),
         Binding("escape", "stop_auto", "Zatrzymaj"),
+        # Session selectors (#17)
+        Binding("p", "switch_profile", "Profil"),
+        Binding("b", "switch_backend", "Silnik"),
+        Binding("m", "switch_model", "Model"),
+        Binding("o", "session_options", "Opcje"),
+        Binding("u", "navigate_url", "URL"),
+        Binding("c", "reopen_browser", "Przeglądarka"),
+        Binding("l", "reload_profiles", "Przeładuj"),
+        Binding("r", "reset_context", "Reset AI"),
     ]
 
     DEFAULT_CSS = """
@@ -311,6 +356,179 @@ class DashboardApp(App[int]):
     def on_unmount(self) -> None:
         self._runner.stop()
         self._close_browser_blocking()
+
+    # --- Session selectors and actions (modals live in tui_modals) -----------------
+
+    def _apply_selection(self, selection: RuntimeSelection, message: str) -> None:
+        self._session.selection = selection
+        self.solver = self._session.solver_builder(selection, self._session.cancellation)
+        self.log_activity(message)
+        self.refresh_sidebar()
+
+    def action_switch_profile(self) -> None:
+        sel = self._session.selection
+        profiles = self._session.config.profiles
+        choices = [(p.key, f"{p.name} ({p.key})") for p in profiles.values()]
+
+        def _chosen(key: str | None) -> None:
+            if key is None or key not in profiles:
+                return
+            profile = profiles[key]
+            self._apply_selection(
+                replace(self._session.selection, profile=profile, model_override=None),
+                f"Przełączono profil na: {profile.name} ({profile.key}).",
+            )
+
+        self.push_screen(
+            ChoiceModal("Wybierz profil przedmiotu", choices, active=sel.profile.key), _chosen
+        )
+
+    def action_switch_backend(self) -> None:
+        sel = self._session.selection
+        choices = [("agy", "agy (Antigravity CLI)"), ("api", "api (Gemini API)")]
+
+        def _chosen(value: str | None) -> None:
+            if value not in ("agy", "api"):
+                return
+            target: BackendKind = "agy" if value == "agy" else "api"
+            current = self._session.selection
+            if target == current.backend:
+                self.log_activity(f"Silnik '{target}' jest już aktywny.")
+                return
+            try:
+                backend, agy_bin = self._session.backend_resolver(target, self._session.config)
+            except ConfigurationError as exc:
+                self.log_activity(f"BŁĄD: {exc}")
+                return
+            self._apply_selection(
+                replace(current, backend=backend, agy_bin=agy_bin),
+                f"Przełączono silnik AI na: {backend}.",
+            )
+
+        self.push_screen(ChoiceModal("Wybierz silnik AI", choices, active=sel.backend), _chosen)
+
+    def action_switch_model(self) -> None:
+        sel = self._session.selection
+        models = collect_available_models(
+            self._session.config.profiles, sel.profile.key, backend=sel.backend
+        )
+        choices = [(model, model) for model in models]
+        choices.append((_CUSTOM_MODEL, "Własny model…"))
+
+        def _apply(model: str | None) -> None:
+            if model:
+                self._apply_selection(
+                    replace(self._session.selection, model_override=model), f"Zmieniono model AI na: {model}."
+                )
+
+        def _chosen(value: str | None) -> None:
+            if value == _CUSTOM_MODEL:
+                self.push_screen(TextInputModal("Podaj własną nazwę modelu"), _apply)
+            else:
+                _apply(value)
+
+        self.push_screen(ChoiceModal("Wybierz model AI", choices, active=sel.active_model), _chosen)
+
+    def action_session_options(self) -> None:
+        def _toggle(key: str, value: bool) -> None:
+            if key == OPTION_CONFIRM_BEFORE_NEXT:
+                self.confirm_before_next = value
+            elif key == OPTION_SHOW_REASONING:
+                self.show_reasoning = value
+            self.log_activity(f"Ustawiono {OPTION_LABELS[key]}: {format_toggle_label(value)}")
+            self.refresh_sidebar()
+
+        values = {
+            OPTION_CONFIRM_BEFORE_NEXT: self.confirm_before_next,
+            OPTION_SHOW_REASONING: self.show_reasoning,
+        }
+        self.push_screen(OptionsModal(values, _toggle))
+
+    def action_navigate_url(self) -> None:
+        def _chosen(url: str | None) -> None:
+            if url:
+                self.run_worker(self._navigate(url), exclusive=True, group="browser")
+
+        current = self._session.selection.moodle_url
+        self.push_screen(TextInputModal("Podaj adres URL quizu", value=current), _chosen)
+
+    async def _navigate(self, url: str) -> None:
+        self._session.selection = replace(self._session.selection, moodle_url=url)
+        page = self._page
+        if page is None:
+            await self._open_browser()
+            return
+        try:
+            await asyncio.to_thread(page.navigate, url)
+        except Exception as exc:
+            self.log_activity(f"BŁĄD: Nie udało się przejść pod adres {url} ({exc}).")
+        else:
+            self.log_activity(f"Przechodzę pod adres: {url}")
+        self.refresh_sidebar()
+
+    async def close_browser(self) -> None:
+        """Close the browser while keeping the browser worker alive for a later reopen."""
+        self._page = None
+
+        def _close() -> None:
+            cm = self._browser_cm
+            self._browser_cm = None
+            if cm is not None:
+                try:
+                    cm.__exit__(None, None, None)
+                except Exception:
+                    pass  # A dead browser is already closed.
+
+        await self._run_in_browser(_close)
+        self.refresh_sidebar()
+
+    def action_reopen_browser(self) -> None:
+        self.run_worker(self._reopen_browser(), exclusive=True, group="browser")
+
+    async def _reopen_browser(self) -> None:
+        page = self._page
+        if page is not None:
+            try:
+                is_open = await asyncio.to_thread(page.is_open)
+            except Exception:
+                is_open = False
+            if is_open:
+                self.log_activity("Przeglądarka jest już otwarta.")
+                return
+            await self.close_browser()
+        self.log_activity("Ponownie otwieram przeglądarkę…")
+        await self._open_browser()
+
+    def action_reload_profiles(self) -> None:
+        sel = self._session.selection
+        try:
+            profiles = self._session.profiles_loader()
+        except ConfigurationError as exc:
+            self.log_activity(
+                f"BŁĄD: Nie udało się przeładować profili ({exc}). "
+                "Zachowano poprzednią konfigurację."
+            )
+            return
+        if not profiles:
+            self.log_activity("BŁĄD: Brak profili na dysku. Zachowano poprzednią konfigurację.")
+            return
+        self._session.config = replace(self._session.config, profiles=profiles)
+        if sel.profile.key in profiles:
+            profile = profiles[sel.profile.key]
+            note = f"Przeładowano profile z dysku. Aktywny profil: {profile.name} ({profile.key})."
+        else:
+            fallback = "ogolny" if "ogolny" in profiles else next(iter(profiles))
+            profile = profiles[fallback]
+            note = (
+                f"Przeładowano profile z dysku. Poprzedni profil '{sel.profile.key}' został "
+                f"usunięty; przełączono na: {profile.name} ({profile.key})."
+            )
+        self._apply_selection(replace(sel, profile=profile, model_override=None), note)
+
+    def action_reset_context(self) -> None:
+        self.solver.reset_session()
+        self.log_activity("Zresetowano kontekst AI.")
+        self.refresh_sidebar()
 
 
 def run_tui(session: TuiSession) -> int:
