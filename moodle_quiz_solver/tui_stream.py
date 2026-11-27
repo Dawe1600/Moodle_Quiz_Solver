@@ -27,7 +27,7 @@ from moodle_quiz_solver.auto_mode import (
     run_auto_mode,
 )
 from moodle_quiz_solver.cancellation import InMemoryCancellation
-from moodle_quiz_solver.cli_ui import _STOP_REASON_LABELS
+from moodle_quiz_solver.cli_ui import format_stop_reason
 from moodle_quiz_solver.domain import Answer, Question
 from moodle_quiz_solver.quiz_page import QuizPage
 from moodle_quiz_solver.solver import Solver
@@ -85,7 +85,7 @@ def format_progress(event: AutoModeEvent) -> str:
 
 def format_summary(result: AutoModeResult) -> str:
     """Return the stop summary entry for the stream."""
-    reason = _STOP_REASON_LABELS.get(result.stop_reason, result.stop_reason)
+    reason = format_stop_reason(result)
     text = (
         f"Podsumowanie trybu AUTO: {reason}. W tym przebiegu: "
         f"{result.pages_completed} str., {result.questions_answered} pyt."
@@ -104,7 +104,7 @@ class ConfirmAdvanceScreen(ModalScreen[bool]):
 
     BINDINGS: ClassVar[list[BindingType]] = [
         Binding("enter,k", "choose(True)", "Kontynuuj"),
-        Binding("escape,s", "choose(False)", "Zatrzymaj"),
+        Binding("escape", "choose(False)", "Zatrzymaj"),
     ]
 
     DEFAULT_CSS = """
@@ -184,12 +184,19 @@ class AutoModeRunner:
             result = AutoModeResult(stop_reason="page_error", error=str(exc))
             self._forward(AutoModeStopped(result=result))
             return result
+        finally:
+            self.running = False
 
     def _forward(self, event: AutoModeEvent) -> None:
+        self._call_ui(self._on_event, event)
+
+    def _call_ui(self, fn: Callable[..., None], *args: object) -> bool:
+        """Run fn on the Textual loop; return False when the app already stopped."""
         try:
-            self._app.call_from_thread(self._on_event, event)
+            self._app.call_from_thread(fn, *args)
         except RuntimeError:
-            pass  # The app already stopped (e.g. quit during a run); nothing to render.
+            return False  # The app already stopped (e.g. quit during a run).
+        return True
 
     def _confirm_advance(self) -> bool:
         done = threading.Event()
@@ -204,13 +211,14 @@ class AutoModeRunner:
         try:
             if self._cancellation.is_cancelled():
                 return False
-            self._app.call_from_thread(self._show_confirm, _resolve)
+            if not self._call_ui(self._show_confirm, _resolve):
+                return False
             done.wait()
         finally:
             with self._lock:
                 self._pending_confirm = None
         if self._cancellation.is_cancelled():
-            self._app.call_from_thread(self._dismiss_confirm)
+            self._call_ui(self._dismiss_confirm)
             return False
         return choice[0]
 

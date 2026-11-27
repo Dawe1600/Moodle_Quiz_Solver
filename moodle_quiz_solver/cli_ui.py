@@ -46,6 +46,11 @@ class StatusSnapshot:
     show_reasoning: bool = True
 
 
+def format_stop_reason(result: AutoModeResult) -> str:
+    """Return the Polish label of an Auto Mode stop reason."""
+    return _STOP_REASON_LABELS.get(result.stop_reason, result.stop_reason)
+
+
 def format_toggle_label(enabled: bool) -> str:
     """Format a boolean session toggle as a concise Polish ON/OFF label."""
     return "WŁ." if enabled else "WYŁ."
@@ -220,7 +225,7 @@ class CliRenderer:
         total_questions: int,
     ) -> None:
         """Render a concise post-run summary after Auto Mode finishes."""
-        reason_label = _STOP_REASON_LABELS.get(result.stop_reason, result.stop_reason)
+        reason_label = format_stop_reason(result)
         summary = Text()
         summary.append(f"Podsumowanie trybu AUTO: {reason_label}. ", style="bold")
         summary.append(

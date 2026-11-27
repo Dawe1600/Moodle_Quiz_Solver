@@ -609,23 +609,21 @@ def main(
         selection = select_runtime(
             config, which=shutil.which, input_fn=input_fn, output_fn=output_fn
         )
-        cancellation: Cancellation = (
-            InMemoryCancellation() if use_tui else TerminalCancellation()
-        )
+        tui_cancellation = InMemoryCancellation()
+        cancellation: Cancellation = tui_cancellation if use_tui else TerminalCancellation()
         transport = _build_transport(selection, cancellation)
     except ConfigurationError as exc:
         output_fn(f"BŁĄD: {exc}")
         return 1
 
     if use_tui:
-        assert isinstance(cancellation, InMemoryCancellation)
         return run_tui(
             TuiSession(
                 config=config,
                 selection=selection,
                 opener=open_quiz_page,
                 solver_builder=_rebuild_solver,
-                cancellation=cancellation,
+                cancellation=tui_cancellation,
             )
         )
 

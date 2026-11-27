@@ -45,10 +45,9 @@ SolverBuilder = Callable[[RuntimeSelection, Cancellation], Solver]
 HELP_ENTRIES: tuple[tuple[str, str], ...] = (
     ("Enter/a", "Tryb AUTO – rozwiązuje kolejne strony quizu"),
     ("s", "Krok – rozwiązuje tylko bieżącą stronę quizu"),
-    ("Esc", "Zatrzymaj tryb AUTO (również przycisk Stop)"),
+    ("Esc", "Zatrzymaj tryb AUTO (również przycisk Zatrzymaj); w oknie pomocy: zamknij"),
     ("h", "Pomoc – lista skrótów klawiszowych"),
     ("q", "Wyjście – zamyka przeglądarkę i kończy sesję"),
-    ("Esc", "Zamyka okno pomocy (w oknie pomocy)"),
 )
 
 
@@ -123,7 +122,7 @@ class DashboardApp(App[int]):
         # Auto Mode stream (#16)
         Binding("enter,a", "auto_mode", "Tryb AUTO"),
         Binding("s", "step_mode", "Krok"),
-        Binding("escape", "stop_auto", "Stop"),
+        Binding("escape", "stop_auto", "Zatrzymaj"),
     ]
 
     DEFAULT_CSS = """
@@ -157,7 +156,7 @@ class DashboardApp(App[int]):
             with Vertical():
                 with Horizontal(id="run-bar"):
                     yield ProgressIndicator(IDLE_PROGRESS, id="progress")
-                    stop = Button("Stop", id="stop", variant="error", disabled=True)
+                    stop = Button("Zatrzymaj", id="stop", variant="error", disabled=True)
                     stop.can_focus = False
                     yield stop
                 yield ActivityStream(id="activity")
