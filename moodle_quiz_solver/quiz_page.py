@@ -2,15 +2,17 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+import time
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from typing import Literal, Protocol
+from typing import Literal, Protocol, runtime_checkable
 
 from playwright.sync_api import Error as PlaywrightError
+from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 from playwright.sync_api import Locator, Page, sync_playwright
 
 from moodle_quiz_solver.domain import Answer, Question
-from moodle_quiz_solver.exceptions import QuizPageError
+from moodle_quiz_solver.exceptions import CancellationError, QuizPageError
 
 NavigationOutcome = Literal["next", "finished", "missing"]
 
@@ -39,11 +41,134 @@ class QuizPage(Protocol):
         ...
 
 
+@runtime_checkable
+class QuestionWaitingQuizPage(QuizPage, Protocol):
+    """Quiz Page that can wait for Questions, find the quiz tab and enter an attempt."""
+
+    def wait_for_questions(
+        self,
+        *,
+        is_cancelled: Callable[[], bool],
+        confirm_start: Callable[[str], bool],
+    ) -> list[Question]:
+        """Wait for Questions; ``confirm_start`` must approve starting a new attempt."""
+        ...
+
+    def describe_location(self) -> str:
+        """Return the current page URL and title for diagnostics."""
+        ...
+
+
+_QUESTION_SELECTOR = ".que"
+_POLL_SLICE_MS = 250
+_CONTINUE_ATTEMPT_LABELS = ("Kontynuuj ostatnie podejście", "Continue your attempt")
+_START_ATTEMPT_LABELS = (
+    "Rozpocznij nowe podejście",
+    "Rozpocznij podejście",
+    "Re-attempt quiz",
+    "Attempt quiz",
+)
+_PREFLIGHT_SUBMIT_SELECTOR = (
+    "#mod_quiz_preflight_form #id_submitbutton, "
+    "#mod_quiz_preflight_form input[type='submit'], "
+    "#mod_quiz_preflight_form button[type='submit']"
+)
+
+
+def _attempt_button_selector(label: str) -> str:
+    return (
+        f"button:has-text('{label}'), input[type='submit'][value*='{label}'], "
+        f"a:has-text('{label}')"
+    )
+
+
 class PlaywrightQuizPage:
     """Deep Quiz Page adapter hiding Playwright locators and Moodle DOM details."""
 
-    def __init__(self, page: Page) -> None:
+    def __init__(self, page: Page, *, question_wait_s: float = 10.0) -> None:
         self._page = page
+        self._question_wait_s = question_wait_s
+
+    def wait_for_questions(
+        self,
+        *,
+        is_cancelled: Callable[[], bool],
+        confirm_start: Callable[[str], bool],
+    ) -> list[Question]:
+        """Wait for Questions, switch to the quiz tab, or enter an attempt, then extract.
+
+        "Kontynuuj ostatnie podejście" is clicked automatically; starting a new attempt
+        is irreversible, so it is clicked only when ``confirm_start(label)`` approves.
+        Raises CancellationError as soon as ``is_cancelled`` reports True.
+        """
+        with _translate_playwright_errors("Błąd oczekiwania na pytania quizu"):
+            if self._poll_for_questions(is_cancelled):
+                return self.extract_questions()
+            if self._switch_to_tab_with_questions():
+                return self.extract_questions()
+            if self._enter_attempt(confirm_start) and self._poll_for_questions(
+                is_cancelled, confirm_preflight=True
+            ):
+                return self.extract_questions()
+            return []
+
+    def describe_location(self) -> str:
+        """Return the current page URL and title for diagnostics."""
+        try:
+            title = self._page.title()
+        except PlaywrightError:
+            title = "?"
+        return f"URL: {self._page.url}, tytuł: {title}"
+
+    def _poll_for_questions(
+        self, is_cancelled: Callable[[], bool], *, confirm_preflight: bool = False
+    ) -> bool:
+        deadline = time.monotonic() + self._question_wait_s
+        while True:
+            if is_cancelled():
+                raise CancellationError("Przerwano oczekiwanie na pytania quizu.")
+            if confirm_preflight:
+                submit = self._first_visible_match(_PREFLIGHT_SUBMIT_SELECTOR)
+                if submit is not None:
+                    submit.click()
+                    confirm_preflight = False
+            remaining_ms = (deadline - time.monotonic()) * 1000
+            if remaining_ms <= 0:
+                return False
+            try:
+                self._page.wait_for_selector(
+                    _QUESTION_SELECTOR,
+                    state="attached",
+                    timeout=max(1.0, min(_POLL_SLICE_MS, remaining_ms)),
+                )
+                return True
+            except PlaywrightTimeoutError:
+                continue
+
+    def _switch_to_tab_with_questions(self) -> bool:
+        for candidate in self._page.context.pages:
+            if candidate is self._page or candidate.is_closed():
+                continue
+            if candidate.locator(_QUESTION_SELECTOR).count() > 0:
+                self._page = candidate
+                candidate.bring_to_front()
+                return True
+        return False
+
+    def _enter_attempt(self, confirm_start: Callable[[str], bool]) -> bool:
+        for label in _CONTINUE_ATTEMPT_LABELS:
+            button = self._first_visible_match(_attempt_button_selector(label))
+            if button is not None:
+                button.click()
+                return True
+        for label in _START_ATTEMPT_LABELS:
+            button = self._first_visible_match(_attempt_button_selector(label))
+            if button is not None:
+                if not confirm_start(label):
+                    return False
+                button.click()
+                return True
+        return False
 
     def is_open(self) -> bool:
         """Return whether the underlying page and browser are still open."""

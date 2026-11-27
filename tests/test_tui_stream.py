@@ -15,7 +15,11 @@ from moodle_quiz_solver.domain import Answer, Question, SubjectProfile
 from moodle_quiz_solver.quiz_page import NavigationOutcome, QuizPage
 from moodle_quiz_solver.solver import Solver, TransportRequest
 from moodle_quiz_solver.tui import ActivityStream, DashboardApp, SessionSidebar, TuiSession
-from moodle_quiz_solver.tui_stream import ConfirmAdvanceScreen, ProgressIndicator
+from moodle_quiz_solver.tui_stream import (
+    ConfirmAdvanceScreen,
+    ConfirmStartAttemptScreen,
+    ProgressIndicator,
+)
 
 pytestmark = pytest.mark.asyncio
 
@@ -235,4 +239,51 @@ async def test_stop_while_confirm_modal_open_closes_it() -> None:
         await _settle(app, pilot)
         assert not isinstance(app.screen, ConfirmAdvanceScreen)
         assert page.advances == 0
+        assert not app.auto_running
+
+
+class _StartAttemptPage(_Page):
+    """Fake Quiz Page sitting on the "Rozpocznij podejście" screen until confirmed."""
+
+    def __init__(self) -> None:
+        super().__init__(pages=1)
+        self.started = False
+
+    def extract_questions(self) -> list[Question]:
+        return super().extract_questions() if self.started else []
+
+    def wait_for_questions(self, *, is_cancelled, confirm_start):  # type: ignore[no-untyped-def]
+        if confirm_start("Rozpocznij podejście"):
+            self.started = True
+        return self.extract_questions()
+
+    def describe_location(self) -> str:
+        return "URL: https://moodle.test/mod/quiz/view.php, tytuł: Quiz"
+
+
+async def _wait_for_start_modal(app: DashboardApp, pilot: Pilot[int]) -> None:
+    for _ in range(250):
+        await pilot.pause(0.02)
+        if isinstance(app.screen, ConfirmStartAttemptScreen):
+            return
+
+
+@pytest.mark.parametrize(("key", "started"), [("enter", True), ("escape", False)])
+async def test_start_attempt_requires_tui_confirmation(key: str, started: bool) -> None:
+    page = _StartAttemptPage()
+    app = DashboardApp(_session(page, _Transport()))
+    async with app.run_test() as pilot:
+        await _settle(app, pilot)
+        await pilot.press("a")
+        await _wait_for_start_modal(app, pilot)
+        assert isinstance(app.screen, ConfirmStartAttemptScreen)
+        assert "Rozpocznij podejście" in app.screen.BODY_TEXT
+        await pilot.press(key)
+        await _settle(app, pilot)
+        assert page.started is started
+        entries = app.query_one(ActivityStream).entries
+        if started:
+            assert len(_cards(app)) == 2
+        else:
+            assert any("view.php" in e for e in entries)
         assert not app.auto_running

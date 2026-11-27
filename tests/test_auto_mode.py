@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 
 import pytest
@@ -16,7 +16,7 @@ from moodle_quiz_solver.auto_mode import (
 )
 from moodle_quiz_solver.cancellation import InMemoryCancellation
 from moodle_quiz_solver.domain import Answer, Question, SubjectProfile
-from moodle_quiz_solver.exceptions import QuizPageError, SolverError
+from moodle_quiz_solver.exceptions import CancellationError, QuizPageError, SolverError
 from moodle_quiz_solver.quiz_page import NavigationOutcome
 from moodle_quiz_solver.solver import Solver, TransportRequest
 
@@ -472,3 +472,101 @@ def test_run_auto_mode_output_unchanged_with_and_without_event_fn() -> None:
         return logs
 
     assert run(True) == run(False)
+
+
+class _RecoveringFakeQuizPage(_FakeQuizPage):
+    """Fake whose Questions only appear after waiting (optionally after a start confirmation)."""
+
+    def __init__(self, recovered: list[Question], *, needs_start: bool = False) -> None:
+        super().__init__(pages=[[]], outcomes=["finished"])
+        self._recovered = recovered
+        self._needs_start = needs_start
+        self.start_prompts: list[str] = []
+        self.wait_calls = 0
+
+    def wait_for_questions(
+        self,
+        *,
+        is_cancelled: Callable[[], bool],
+        confirm_start: Callable[[str], bool],
+    ) -> list[Question]:
+        self.wait_calls += 1
+        if is_cancelled():
+            raise CancellationError("Przerwano czekanie.")
+        if self._needs_start:
+            self.start_prompts.append("Rozpocznij podejście")
+            if not confirm_start("Rozpocznij podejście"):
+                return []
+        self._pages = [list(self._recovered)]
+        return list(self._recovered)
+
+    def describe_location(self) -> str:
+        return "URL: https://moodle.example/mod/quiz/view.php, tytuł: Quiz 1"
+
+
+def test_run_auto_mode_waits_for_delayed_questions() -> None:
+    q1 = Question(index=0, prompt="Q1?", question_type="radio", options=("A", "B"))
+    quiz_page = _RecoveringFakeQuizPage([q1])
+    transport = _FakeTransport(['{"answer_type":"radio","selected_indices":[0],"reasoning":"r"}'])
+    cancellation = _RecordingCancellation()
+    solver = Solver(profile=_profile(), transport=transport, cancellation=cancellation)
+
+    result = run_auto_mode(quiz_page, solver, cancellation, output_fn=lambda _: None)
+
+    assert result.stop_reason == "finished"
+    assert result.questions_answered == 1
+    assert quiz_page.wait_calls == 1
+
+
+def test_run_auto_mode_passes_start_confirmation_and_reports_location_when_declined() -> None:
+    q1 = Question(index=0, prompt="Q1?", question_type="radio", options=("A", "B"))
+    quiz_page = _RecoveringFakeQuizPage([q1], needs_start=True)
+    cancellation = _RecordingCancellation()
+    solver = Solver(profile=_profile(), transport=_FakeTransport([]), cancellation=cancellation)
+    asked: list[str] = []
+    output: list[str] = []
+
+    def _decline(label: str) -> bool:
+        asked.append(label)
+        return False
+
+    result = run_auto_mode(
+        quiz_page,
+        solver,
+        cancellation,
+        output_fn=output.append,
+        confirm_start_attempt=_decline,
+    )
+
+    assert asked == ["Rozpocznij podejście"]
+    assert result.stop_reason == "no_questions"
+    assert result.error is not None
+    assert "view.php" in result.error and "Quiz 1" in result.error
+    assert any("view.php" in line for line in output)
+
+
+def test_run_auto_mode_declines_attempt_start_by_default() -> None:
+    quiz_page = _RecoveringFakeQuizPage([], needs_start=True)
+    cancellation = _RecordingCancellation()
+    solver = Solver(profile=_profile(), transport=_FakeTransport([]), cancellation=cancellation)
+
+    result = run_auto_mode(quiz_page, solver, cancellation, output_fn=lambda _: None)
+
+    assert result.stop_reason == "no_questions"
+
+
+def test_run_auto_mode_waiting_for_questions_is_cancellable() -> None:
+    quiz_page = _RecoveringFakeQuizPage([])
+    cancellation = _RecordingCancellation()
+    solver = Solver(profile=_profile(), transport=_FakeTransport([]), cancellation=cancellation)
+    original = quiz_page.extract_questions
+
+    def _extract_then_cancel() -> list[Question]:
+        cancellation.trigger()
+        return original()
+
+    quiz_page.extract_questions = _extract_then_cancel  # type: ignore[method-assign]
+
+    result = run_auto_mode(quiz_page, solver, cancellation, output_fn=lambda _: None)
+
+    assert result.stop_reason == "cancelled"

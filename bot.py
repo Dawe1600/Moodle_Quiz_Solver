@@ -765,6 +765,9 @@ def main(
                         else None
                     ),
                     show_reasoning=show_reasoning,
+                    confirm_start_attempt=lambda label: _confirm_yes_no(
+                        input_fn, f"Kliknąć '{label}' i rozpocząć podejście? [t/N]: "
+                    ),
                 )
             except (QuizPageError, PlaywrightError) as exc:
                 browser.handle_runtime_error(exc)

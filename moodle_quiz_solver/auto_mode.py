@@ -11,7 +11,7 @@ from typing import Literal
 from moodle_quiz_solver.cancellation import Cancellation
 from moodle_quiz_solver.domain import Answer, Question
 from moodle_quiz_solver.exceptions import CancellationError, QuizPageError, SolverError
-from moodle_quiz_solver.quiz_page import QuizPage
+from moodle_quiz_solver.quiz_page import QuestionWaitingQuizPage, QuizPage
 from moodle_quiz_solver.solver import Solver
 
 AutoStopReason = Literal[
@@ -101,11 +101,13 @@ def run_auto_mode(
     before_advance: Callable[[], bool] | None = None,
     show_reasoning: bool = True,
     event_fn: Callable[[AutoModeEvent], None] | None = None,
+    confirm_start_attempt: Callable[[str], bool] | None = None,
 ) -> AutoModeResult:
     """Run Auto Mode until quiz completion, missing navigation, error, or cancellation.
 
     When ``event_fn`` is given it receives typed ``AutoModeEvent`` values in order,
     ending with exactly one ``AutoModeStopped``; ``output_fn``/``status_fn`` are unaffected.
+    ``confirm_start_attempt(label)`` approves starting a new quiz attempt (declined when None).
     """
     emit: Callable[[AutoModeEvent], None] = event_fn if event_fn is not None else lambda _e: None
     result = _run(
@@ -118,6 +120,7 @@ def run_auto_mode(
         before_advance=before_advance,
         show_reasoning=show_reasoning,
         emit=emit,
+        confirm_start_attempt=confirm_start_attempt,
     )
     emit(AutoModeStopped(result=result))
     return result
@@ -134,6 +137,7 @@ def _run(
     before_advance: Callable[[], bool] | None,
     show_reasoning: bool,
     emit: Callable[[AutoModeEvent], None],
+    confirm_start_attempt: Callable[[str], bool] | None = None,
 ) -> AutoModeResult:
     pages_completed = 0
     questions_answered = 0
@@ -152,12 +156,24 @@ def _run(
                 )
                 with status_ctx("Analizuję stronę... (ESC przerywa)"):
                     questions = quiz_page.extract_questions()
+                location: str | None = None
+                if not questions and isinstance(quiz_page, QuestionWaitingQuizPage):
+                    with status_ctx("Czekam na pytania quizu... (ESC przerywa)"):
+                        questions = quiz_page.wait_for_questions(
+                            is_cancelled=cancellation.is_cancelled,
+                            confirm_start=confirm_start_attempt or (lambda _label: False),
+                        )
+                    if not questions:
+                        location = quiz_page.describe_location()
                 if not questions:
                     output_fn("Nie znaleziono pytania (.que). Czy jesteś w quizie?")
+                    if location is not None:
+                        output_fn(f"Bieżąca strona: {location}")
                     return AutoModeResult(
                         stop_reason="no_questions",
                         pages_completed=pages_completed,
                         questions_answered=questions_answered,
+                        error=location,
                     )
 
                 total = len(questions)

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -497,3 +497,160 @@ def test_playwright_quiz_page_translates_closed_page_errors_to_quiz_page_error()
     with ThreadPoolExecutor(max_workers=1) as pool:
         pool.submit(_run).result()
 
+
+
+# --- Waiting for Questions, tab detection and attempt start pages (#19) ---
+
+_QUE_HTML = "<div class='que'><div class='qtext'>Q?</div><div class='answer'><input type='text' name='a'/></div></div>"
+
+
+def _never_cancelled() -> bool:
+    return False
+
+
+def _recorder(asked: list[str], answer: bool) -> Callable[[str], bool]:
+    def _confirm(label: str) -> bool:
+        asked.append(label)
+        return answer
+
+    return _confirm
+
+
+def _fresh_page(browser_page: Page) -> Page:
+    browser = browser_page.context.browser
+    assert browser is not None
+    return browser.new_context().new_page()
+
+
+def test_wait_for_questions_finds_delayed_questions(browser_page: Page) -> None:
+    page = _fresh_page(browser_page)
+    page.set_content(
+        "<div id='root'></div><script>setTimeout(() => {"
+        f"document.getElementById('root').innerHTML = \"{_QUE_HTML}\";"
+        "}, 400);</script>"
+    )
+    quiz_page = PlaywrightQuizPage(page, question_wait_s=5.0)
+
+    assert quiz_page.extract_questions() == []
+    questions = quiz_page.wait_for_questions(
+        is_cancelled=_never_cancelled, confirm_start=lambda _label: False
+    )
+
+    assert len(questions) == 1
+    page.context.close()
+
+
+def test_wait_for_questions_switches_to_tab_with_quiz(browser_page: Page) -> None:
+    page = _fresh_page(browser_page)
+    page.set_content("<p>Kurs</p>")
+    quiz_tab = page.context.new_page()
+    quiz_tab.set_content(_QUE_HTML)
+    quiz_page = PlaywrightQuizPage(page, question_wait_s=0.3)
+
+    questions = quiz_page.wait_for_questions(
+        is_cancelled=_never_cancelled, confirm_start=lambda _label: False
+    )
+
+    assert len(questions) == 1
+    quiz_page.apply_answer(questions[0], Answer(answer_type="text", reasoning="r", text_answers=("x",)))
+    assert quiz_tab.locator("input[name='a']").input_value() == "x"
+    page.context.close()
+
+
+def _start_page_html(label: str) -> str:
+    return (
+        f"<button id='start' onclick=\"document.body.innerHTML = &quot;{_QUE_HTML}&quot;\">"
+        f"{label}</button>"
+    )
+
+
+def test_wait_for_questions_clicks_continue_attempt_without_asking(browser_page: Page) -> None:
+    page = _fresh_page(browser_page)
+    page.set_content(_start_page_html("Kontynuuj ostatnie podejście"))
+    asked: list[str] = []
+    quiz_page = PlaywrightQuizPage(page, question_wait_s=0.3)
+
+    questions = quiz_page.wait_for_questions(
+        is_cancelled=_never_cancelled, confirm_start=_recorder(asked, False)
+    )
+
+    assert len(questions) == 1
+    assert asked == []
+    page.context.close()
+
+
+@pytest.mark.parametrize("label", ["Rozpocznij podejście", "Rozpocznij nowe podejście"])
+def test_wait_for_questions_starts_attempt_only_after_confirmation(
+    browser_page: Page, label: str
+) -> None:
+    page = _fresh_page(browser_page)
+    page.set_content(_start_page_html(label))
+    asked: list[str] = []
+    quiz_page = PlaywrightQuizPage(page, question_wait_s=0.3)
+
+    questions = quiz_page.wait_for_questions(
+        is_cancelled=_never_cancelled, confirm_start=_recorder(asked, True)
+    )
+
+    assert len(questions) == 1
+    assert asked == [label]
+    page.context.close()
+
+
+def test_wait_for_questions_does_not_start_attempt_when_declined(browser_page: Page) -> None:
+    page = _fresh_page(browser_page)
+    page.set_content(_start_page_html("Rozpocznij podejście"))
+    quiz_page = PlaywrightQuizPage(page, question_wait_s=0.3)
+
+    questions = quiz_page.wait_for_questions(
+        is_cancelled=_never_cancelled, confirm_start=lambda _label: False
+    )
+
+    assert questions == []
+    assert page.locator("#start").count() == 1
+    page.context.close()
+
+
+def test_wait_for_questions_confirms_start_attempt_preflight_dialog(browser_page: Page) -> None:
+    page = _fresh_page(browser_page)
+    page.set_content(
+        "<button id='start' onclick=\"document.getElementById('mod_quiz_preflight_form')"
+        ".style.display='block'\">Rozpocznij podejście</button>"
+        "<form id='mod_quiz_preflight_form' style='display:none'>"
+        "<input type='button' id='id_submitbutton' value='Rozpocznij podejście' "
+        f"onclick=\"document.body.innerHTML = &quot;{_QUE_HTML}&quot;\"/></form>"
+    )
+    asked: list[str] = []
+    quiz_page = PlaywrightQuizPage(page, question_wait_s=2.0)
+
+    questions = quiz_page.wait_for_questions(
+        is_cancelled=_never_cancelled, confirm_start=_recorder(asked, True)
+    )
+
+    assert len(questions) == 1
+    assert asked == ["Rozpocznij podejście"]
+    page.context.close()
+
+
+def test_wait_for_questions_is_cancellable(browser_page: Page) -> None:
+    page = _fresh_page(browser_page)
+    page.set_content("<p>pusto</p>")
+    quiz_page = PlaywrightQuizPage(page, question_wait_s=30.0)
+
+    # Match by name: test_package_import purges sys.modules, so the class object may differ.
+    with pytest.raises(Exception) as info:
+        quiz_page.wait_for_questions(is_cancelled=lambda: True, confirm_start=lambda _l: False)
+    assert type(info.value).__name__ == "CancellationError"
+    page.context.close()
+
+
+def test_describe_location_reports_url_and_title(browser_page: Page) -> None:
+    page = _fresh_page(browser_page)
+    page.set_content("<title>Mój kurs</title><p>x</p>")
+    quiz_page = PlaywrightQuizPage(page)
+
+    description = quiz_page.describe_location()
+
+    assert "about:blank" in description
+    assert "Mój kurs" in description
+    page.context.close()
