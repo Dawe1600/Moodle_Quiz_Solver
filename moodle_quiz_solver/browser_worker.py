@@ -12,7 +12,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from typing import TypeVar
 
 from moodle_quiz_solver.domain import Answer, Question
-from moodle_quiz_solver.quiz_page import NavigationOutcome, QuizPage
+from moodle_quiz_solver.quiz_page import NavigationOutcome, QuestionWaitingQuizPage, QuizPage
 
 _T = TypeVar("_T")
 
@@ -61,3 +61,22 @@ class WorkerQuizPage:
 
     def is_open(self) -> bool:
         return self._worker.call(self._page.is_open)
+
+    def wait_for_questions(
+        self,
+        *,
+        is_cancelled: Callable[[], bool],
+        confirm_start: Callable[[str], bool],
+    ) -> list[Question]:
+        page = self._page
+        if not isinstance(page, QuestionWaitingQuizPage):
+            return []
+        return self._worker.call(
+            lambda: page.wait_for_questions(is_cancelled=is_cancelled, confirm_start=confirm_start)
+        )
+
+    def describe_location(self) -> str:
+        page = self._page
+        if not isinstance(page, QuestionWaitingQuizPage):
+            return "nieznana"
+        return self._worker.call(page.describe_location)

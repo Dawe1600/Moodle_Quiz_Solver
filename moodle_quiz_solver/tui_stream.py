@@ -116,10 +116,13 @@ class ConfirmAdvanceScreen(ModalScreen[bool]):
     ConfirmAdvanceScreen Button { margin-right: 2; }
     """
 
+    TITLE_TEXT = "Strona quizu wypełniona. Sprawdź przeglądarkę."
+    BODY_TEXT = "Przejść do następnej strony quizu?"
+
     def compose(self) -> ComposeResult:
         with Vertical():
-            yield Static("Strona quizu wypełniona. Sprawdź przeglądarkę.", id="confirm-title")
-            yield Static("Przejść do następnej strony quizu?", id="confirm-body")
+            yield Static(self.TITLE_TEXT, id="confirm-title", markup=False)
+            yield Static(self.BODY_TEXT, id="confirm-body", markup=False)
             with Horizontal():
                 yield Button("Kontynuuj (Enter)", id="confirm-continue", variant="success")
                 yield Button("Zatrzymaj (Esc)", id="confirm-stop", variant="error")
@@ -129,6 +132,19 @@ class ConfirmAdvanceScreen(ModalScreen[bool]):
 
     def action_choose(self, proceed: bool) -> None:
         self.dismiss(proceed)
+
+
+class ConfirmStartAttemptScreen(ConfirmAdvanceScreen):
+    """Modal approving an irreversible quiz attempt start: Continue (True) or Stop (False)."""
+
+    TITLE_TEXT = "Na stronie quizu jest przycisk rozpoczęcia podejścia."
+
+    def __init__(self, label: str) -> None:
+        super().__init__()
+        self.BODY_TEXT = (
+            f"Kliknąć „{label}”? Uruchomi to podejście i ewentualny limit czasu "
+            "(nie da się cofnąć)."
+        )
 
 
 class AutoModeRunner:
@@ -179,6 +195,7 @@ class AutoModeRunner:
                 before_advance=before_advance,
                 show_reasoning=show_reasoning,
                 event_fn=self._forward,
+                confirm_start_attempt=self._confirm_start_attempt,
             )
         except Exception as exc:
             result = AutoModeResult(stop_reason="page_error", error=str(exc))
@@ -199,6 +216,12 @@ class AutoModeRunner:
         return True
 
     def _confirm_advance(self) -> bool:
+        return self._ask(ConfirmAdvanceScreen)
+
+    def _confirm_start_attempt(self, label: str) -> bool:
+        return self._ask(lambda: ConfirmStartAttemptScreen(label))
+
+    def _ask(self, screen_type: Callable[[], ConfirmAdvanceScreen]) -> bool:
         done = threading.Event()
         choice: list[bool] = [False]
 
@@ -211,7 +234,7 @@ class AutoModeRunner:
         try:
             if self._cancellation.is_cancelled():
                 return False
-            if not self._call_ui(self._show_confirm, _resolve):
+            if not self._call_ui(self._show_confirm, screen_type, _resolve):
                 return False
             done.wait()
         finally:
@@ -222,8 +245,10 @@ class AutoModeRunner:
             return False
         return choice[0]
 
-    def _show_confirm(self, resolve: Callable[[bool | None], None]) -> None:
-        self._app.push_screen(ConfirmAdvanceScreen(), resolve)
+    def _show_confirm(
+        self, screen_type: Callable[[], ConfirmAdvanceScreen], resolve: Callable[[bool | None], None]
+    ) -> None:
+        self._app.push_screen(screen_type(), resolve)
 
     def _dismiss_confirm(self) -> None:
         if isinstance(self._app.screen, ConfirmAdvanceScreen):
