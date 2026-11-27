@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import shutil
+import sys
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import AbstractContextManager
 from dataclasses import replace
@@ -11,7 +12,11 @@ from pathlib import Path
 from playwright.sync_api import Error as PlaywrightError
 
 from moodle_quiz_solver.auto_mode import run_auto_mode
-from moodle_quiz_solver.cancellation import Cancellation, TerminalCancellation
+from moodle_quiz_solver.cancellation import (
+    Cancellation,
+    InMemoryCancellation,
+    TerminalCancellation,
+)
 from moodle_quiz_solver.cli_ui import (
     CliRenderer,
     StatusSnapshot,
@@ -33,6 +38,7 @@ from moodle_quiz_solver.domain import BackendKind, SubjectProfile
 from moodle_quiz_solver.exceptions import ConfigurationError, QuizPageError
 from moodle_quiz_solver.quiz_page import QuizPage, open_quiz_page
 from moodle_quiz_solver.solver import AgyTransport, GenAiTransport, ModelTransport, Solver
+from moodle_quiz_solver.tui import TuiSession, run_tui
 
 
 class _BrowserSession:
@@ -583,23 +589,44 @@ def _run_options_menu(
         renderer.render_message(f"Nieprawidłowa opcja: '{choice}'. Wybierz 1-4 lub 0.")
 
 
+def _stdio_is_tty() -> bool:
+    return sys.stdin.isatty() and sys.stdout.isatty()
+
+
 def main(
     argv: Sequence[str] | None = None,
     *,
     input_fn: Callable[[str], str] = input,
     output_fn: Callable[[str], None] = print,
 ) -> int:
-    """Run the interactive Moodle Quiz Solver CLI."""
+    """Run Moodle Quiz Solver: Textual dashboard on a TTY, plain-text CLI otherwise.
+
+    Injected input_fn/output_fn always select the plain-text CLI.
+    """
+    use_tui = input_fn is input and output_fn is print and _stdio_is_tty()
     try:
         config = load_config(cli_args=argv)
         selection = select_runtime(
             config, which=shutil.which, input_fn=input_fn, output_fn=output_fn
         )
-        cancellation = TerminalCancellation()
+        cancellation: Cancellation = (
+            InMemoryCancellation() if use_tui else TerminalCancellation()
+        )
         transport = _build_transport(selection, cancellation)
     except ConfigurationError as exc:
         output_fn(f"BŁĄD: {exc}")
         return 1
+
+    if use_tui:
+        return run_tui(
+            TuiSession(
+                config=config,
+                selection=selection,
+                opener=open_quiz_page,
+                solver_builder=_rebuild_solver,
+                cancellation=cancellation,
+            )
+        )
 
     renderer = CliRenderer(output_fn=output_fn)
     solver = Solver(profile=selection.profile, transport=transport, cancellation=cancellation)
