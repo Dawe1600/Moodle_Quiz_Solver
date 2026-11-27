@@ -115,8 +115,8 @@ async def test_dashboard_sidebar_shows_session_status_and_opens_browser_on_worke
         assert "Przeglądarka: Otwarta" in sidebar
         assert "Strony: 0" in sidebar
         assert "Pytania: 0" in sidebar
-        assert "confirm_before_next: WYŁ." in sidebar
-        assert "show_reasoning: WŁ." in sidebar
+        assert "Potwierdzanie przejścia: WYŁ." in sidebar
+        assert "Pokazuj uzasadnienie: WŁ." in sidebar
 
     assert opener_log and opener_log[0][0] == "https://moodle.test/quiz"
     assert opener_log[0][1] != threading.get_ident()

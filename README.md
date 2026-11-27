@@ -82,6 +82,8 @@ Plik `profiles.json` jest ignorowany przez Gita (`.gitignore`), żeby Twoje loka
 
 ## 4. Jak odpalić i obsługiwać bota
 
+> **Pełnoekranowy panel (Textual):** w interaktywnym terminalu (TTY) bot uruchamia panel z paskiem stanu sesji po lewej i strumieniem aktywności po prawej (`h` – pomoc, `q` – wyjście). Poza TTY (np. przekierowane wejście/wyjście, skrypty) działa dotychczasowy tekstowy interfejs opisany poniżej.
+
 1. Aktywuj środowisko wirtualne i uruchom bota:
    - **Windows:**
      ```powershell

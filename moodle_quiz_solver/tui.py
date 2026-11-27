@@ -9,6 +9,7 @@ through ``TuiSession``. Every synchronous browser call runs on the dedicated
 from __future__ import annotations
 
 import asyncio
+import threading
 from collections.abc import Callable
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
@@ -20,7 +21,7 @@ from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Footer, Static
 
-from moodle_quiz_solver.browser_worker import BrowserWorker
+from moodle_quiz_solver.browser_worker import BrowserWorker, WorkerQuizPage
 from moodle_quiz_solver.cancellation import Cancellation
 from moodle_quiz_solver.cli_ui import format_active_flags, format_toggle_label
 from moodle_quiz_solver.config import AppConfig, RuntimeSelection
@@ -122,6 +123,7 @@ class DashboardApp(App[int]):
         self._browser_cm: AbstractContextManager[QuizPage] | None = None
         self._page: QuizPage | None = None
         self._worker_closed = False
+        self._close_lock = threading.Lock()
         self.pages_solved = 0
         self.questions_solved = 0
         self.confirm_before_next = False
@@ -138,7 +140,7 @@ class DashboardApp(App[int]):
         self.refresh_sidebar()
         self.run_worker(self._open_browser(), exclusive=True, group="browser")
 
-    async def _on_browser_thread(self, fn: Callable[[], _T]) -> _T:
+    async def _run_in_browser(self, fn: Callable[[], _T]) -> _T:
         return await asyncio.wrap_future(self._worker.submit(fn))
 
     @property
@@ -161,8 +163,8 @@ class DashboardApp(App[int]):
             f"Strony: {self.pages_solved}",
             f"Pytania: {self.questions_solved}",
             "",
-            f"confirm_before_next: {format_toggle_label(self.confirm_before_next)}",
-            f"show_reasoning: {format_toggle_label(self.show_reasoning)}",
+            f"Potwierdzanie przejścia: {format_toggle_label(self.confirm_before_next)}",
+            f"Pokazuj uzasadnienie: {format_toggle_label(self.show_reasoning)}",
             f"Flagi: {format_active_flags(self._session.config)}",
         ]
         self.query_one(SessionSidebar).update("\n".join(lines))
@@ -181,7 +183,8 @@ class DashboardApp(App[int]):
             return page
 
         try:
-            self._page = await self._on_browser_thread(_open)
+            raw_page = await self._run_in_browser(_open)
+            self._page = WorkerQuizPage(raw_page, self._worker)
         except Exception as exc:
             self._page = None
             self._browser_cm = None
@@ -191,22 +194,25 @@ class DashboardApp(App[int]):
         self.refresh_sidebar()
 
     def _close_browser_blocking(self) -> None:
-        if self._worker_closed:
-            return
-        cm = self._browser_cm
-        self._browser_cm = None
-        self._page = None
+        """Close the browser on its thread (after any pending open) and stop the worker."""
+        with self._close_lock:
+            if self._worker_closed:
+                return
+            self._page = None
 
-        def _close() -> None:
-            if cm is not None:
-                try:
-                    cm.__exit__(None, None, None)
-                except Exception:
-                    pass
+            def _close() -> None:
+                # Read the context on the worker thread so a still-pending open is closed too.
+                cm = self._browser_cm
+                self._browser_cm = None
+                if cm is not None:
+                    try:
+                        cm.__exit__(None, None, None)
+                    except Exception:
+                        pass  # Teardown of an already-dead browser must not block quitting.
 
-        self._worker.call(_close)
-        self._worker.shutdown()
-        self._worker_closed = True
+            self._worker.call(_close)
+            self._worker.shutdown()
+            self._worker_closed = True
 
     def action_help(self) -> None:
         self.push_screen(HelpScreen())

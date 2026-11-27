@@ -11,6 +11,9 @@ from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from typing import TypeVar
 
+from moodle_quiz_solver.domain import Answer, Question
+from moodle_quiz_solver.quiz_page import NavigationOutcome, QuizPage
+
 _T = TypeVar("_T")
 
 
@@ -31,3 +34,30 @@ class BrowserWorker:
     def shutdown(self) -> None:
         """Wait for pending work and stop the browser thread."""
         self._executor.shutdown(wait=True)
+
+
+class WorkerQuizPage:
+    """QuizPage proxy that runs every operation on the BrowserWorker thread.
+
+    Callers on any thread (e.g. Auto Mode in a Textual worker) can use it as a
+    regular QuizPage while Playwright stays bound to its own thread.
+    """
+
+    def __init__(self, page: QuizPage, worker: BrowserWorker) -> None:
+        self._page = page
+        self._worker = worker
+
+    def extract_questions(self) -> list[Question]:
+        return self._worker.call(self._page.extract_questions)
+
+    def apply_answer(self, question: Question, answer: Answer) -> None:
+        self._worker.call(lambda: self._page.apply_answer(question, answer))
+
+    def advance(self) -> NavigationOutcome:
+        return self._worker.call(self._page.advance)
+
+    def navigate(self, url: str) -> None:
+        self._worker.call(lambda: self._page.navigate(url))
+
+    def is_open(self) -> bool:
+        return self._worker.call(self._page.is_open)
