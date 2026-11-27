@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib
 import json
+import os
 import re
 import subprocess
 import tempfile
@@ -282,6 +283,12 @@ class Solver:
         self._transport.reset_session()
 
 
+def default_agy_home() -> Path:
+    """Persistent private agy home used for Agy Isolation (outside the repo)."""
+    base = os.environ.get("LOCALAPPDATA") or str(Path.home() / ".cache")
+    return Path(base) / "moodle-llm-harness" / "agy-home"
+
+
 def _terminate_process(proc: Any) -> None:
     try:
         proc.terminate()
@@ -302,6 +309,7 @@ class AgyTransport:
         agy_bin: str,
         model: str,
         cancellation: Cancellation | None = None,
+        home_dir: Path | None = None,
         popen_fn: Callable[..., Any] = subprocess.Popen,
         sleep_fn: Callable[[float], None] = time.sleep,
         poll_interval: float = 0.15,
@@ -312,6 +320,9 @@ class AgyTransport:
         self._popen = popen_fn
         self._sleep = sleep_fn
         self._poll_interval = poll_interval
+        # Agy Isolation: a private home keeps the user's agy MCP servers, hooks and plugins
+        # (which cost ~35 s per call) out of quiz calls; it must persist for --conversation.
+        self._home_dir = home_dir
         self._conversation_id: str | None = None
         # Serializes agy calls (warm-up vs. solve); the epoch invalidates in-flight results.
         self._call_lock = threading.Lock()
@@ -437,6 +448,7 @@ class AgyTransport:
                 stderr=subprocess.PIPE,
                 text=True,
                 encoding="utf-8",
+                **self._isolation_kwargs(),
             )
         except OSError as exc:
             raise SolverError(f"Failed to launch agy CLI: {exc}") from exc
@@ -451,6 +463,17 @@ class AgyTransport:
 
         stdout, stderr = proc.communicate()
         return int(proc.returncode), str(stdout or ""), str(stderr or "")
+
+    def _isolation_kwargs(self) -> dict[str, Any]:
+        """Private home (USERPROFILE/HOME) and an empty workspace dir for the agy process."""
+        if self._home_dir is None:
+            return {}
+        workdir = self._home_dir / "workspace"
+        workdir.mkdir(parents=True, exist_ok=True)
+        env = dict(os.environ)
+        env["USERPROFILE"] = str(self._home_dir)
+        env["HOME"] = str(self._home_dir)
+        return {"env": env, "cwd": str(workdir)}
 
     def _extract_envelope_payload(self, stdout: str, *, epoch: int) -> str:
         try:

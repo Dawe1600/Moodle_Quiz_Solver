@@ -86,7 +86,9 @@ def test_bot_main_honors_cli_flags_and_interactive_controls(
         yield fake_page
 
     class _FakeAgyTransport:
-        def __init__(self, *, agy_bin: str, model: str, cancellation: object) -> None:
+        def __init__(
+            self, *, agy_bin: str, model: str, cancellation: object, home_dir: object = None
+        ) -> None:
             self.agy_bin = agy_bin
             self.model = model
 
@@ -190,7 +192,9 @@ def test_bot_main_auto_selects_defaults_and_handles_rich_shell_commands(
         yield _FakeQuizPage()
 
     class _FakeAgyTransport:
-        def __init__(self, *, agy_bin: str, model: str, cancellation: object) -> None:
+        def __init__(
+            self, *, agy_bin: str, model: str, cancellation: object, home_dir: object = None
+        ) -> None:
             self.agy_bin = agy_bin
             self.model = model
 
@@ -246,7 +250,9 @@ def test_bot_main_disables_tty_spinner_when_using_custom_output_fn(
         yield _MinimalQuizPage()
 
     class _FakeAgyTransport:
-        def __init__(self, *, agy_bin: str, model: str, cancellation: object) -> None:
+        def __init__(
+            self, *, agy_bin: str, model: str, cancellation: object, home_dir: object = None
+        ) -> None:
             pass
 
         def generate(self, request: object) -> str:
@@ -367,7 +373,9 @@ def test_bot_main_live_profile_switching_and_cancel(
         yield _FakeQuizPage()
 
     class _FakeAgyTransport:
-        def __init__(self, *, agy_bin: str, model: str, cancellation: object) -> None:
+        def __init__(
+            self, *, agy_bin: str, model: str, cancellation: object, home_dir: object = None
+        ) -> None:
             self.model = model
 
         def generate(self, request: object) -> str:
@@ -445,7 +453,9 @@ def test_bot_main_live_backend_switching_and_unavailable_rollback(
         yield _FakeQuizPage()
 
     class _FakeAgyTransport:
-        def __init__(self, *, agy_bin: str, model: str, cancellation: object) -> None:
+        def __init__(
+            self, *, agy_bin: str, model: str, cancellation: object, home_dir: object = None
+        ) -> None:
             self.model = model
 
         def generate(self, request: object) -> str:
@@ -556,7 +566,9 @@ def test_bot_main_model_switching_for_agy_and_api_and_cancel(
     observed_api_queues: list[tuple[str, ...]] = []
 
     class _FakeAgyTransport:
-        def __init__(self, *, agy_bin: str, model: str, cancellation: object) -> None:
+        def __init__(
+            self, *, agy_bin: str, model: str, cancellation: object, home_dir: object = None
+        ) -> None:
             self.model = model
 
         def generate(self, request: object) -> str:
@@ -649,7 +661,9 @@ def _patch_fake_cli(
         yield fake_page
 
     class _FakeAgyTransport:
-        def __init__(self, *, agy_bin: str, model: str, cancellation: object) -> None:
+        def __init__(
+            self, *, agy_bin: str, model: str, cancellation: object, home_dir: object = None
+        ) -> None:
             pass
 
         def generate(self, request: object) -> str:
@@ -803,7 +817,9 @@ def test_bot_main_url_and_open_commands_and_closed_browser_recovery(
             closed_instances += 1
 
     class _FakeAgyTransport:
-        def __init__(self, *, agy_bin: str, model: str, cancellation: object) -> None:
+        def __init__(
+            self, *, agy_bin: str, model: str, cancellation: object, home_dir: object = None
+        ) -> None:
             pass
 
         def generate(self, request: object) -> str:
@@ -879,7 +895,9 @@ def test_bot_main_recovers_when_initial_browser_launch_fails(
         yield  # pragma: no cover
 
     class _FakeAgyTransport:
-        def __init__(self, *, agy_bin: str, model: str, cancellation: object) -> None:
+        def __init__(
+            self, *, agy_bin: str, model: str, cancellation: object, home_dir: object = None
+        ) -> None:
             pass
 
         def generate(self, request: object) -> str:
@@ -939,7 +957,9 @@ def test_bot_main_closed_browser_guard_protects_step_mode(
         yield page
 
     class _FakeAgyTransport:
-        def __init__(self, *, agy_bin: str, model: str, cancellation: object) -> None:
+        def __init__(
+            self, *, agy_bin: str, model: str, cancellation: object, home_dir: object = None
+        ) -> None:
             pass
 
         def generate(self, request: object) -> str:
@@ -997,7 +1017,9 @@ def _install_fake_step_session(
             lifecycle[1] += 1
 
     class _FakeAgyTransport:
-        def __init__(self, *, agy_bin: str, model: str, cancellation: object) -> None:
+        def __init__(
+            self, *, agy_bin: str, model: str, cancellation: object, home_dir: object = None
+        ) -> None:
             self.model = model
 
         def generate(self, request: object) -> str:

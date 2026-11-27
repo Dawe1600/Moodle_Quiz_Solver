@@ -778,3 +778,42 @@ def test_esc_cancels_both_warm_up_and_waiting_solve() -> None:
     solve.join(2)
     assert errors and solve_errors
     assert len(procs) == 1 and procs[0].terminated
+
+
+def test_agy_runs_with_isolated_home_and_empty_workdir(tmp_path: Path) -> None:
+    """Agy Isolation: no user MCP servers/hooks (≈35 s per call) and no repo files in the workspace."""
+    seen_kwargs: list[dict[str, object]] = []
+
+    def fake_popen(_cmd: list[str], **kwargs: object) -> _FakePopen:
+        seen_kwargs.append(kwargs)
+        return _FakePopen(stdout=_agy_envelope("conv-iso"))
+
+    home = tmp_path / "agy-home"
+    transport = AgyTransport(
+        agy_bin="agy", model="m", home_dir=home, popen_fn=fake_popen, sleep_fn=lambda _s: None
+    )
+    Solver(_make_profile(), transport).solve(Question(index=0, prompt="P1"))
+
+    env = seen_kwargs[0]["env"]
+    assert isinstance(env, dict)
+    assert env["USERPROFILE"] == str(home)
+    assert env["HOME"] == str(home)
+    assert "PATH" in env or "Path" in env  # rest of the environment is inherited
+    workdir = Path(str(seen_kwargs[0]["cwd"]))
+    assert workdir.is_dir()
+    assert workdir.parent == home
+    assert list(workdir.iterdir()) == []
+
+
+def test_agy_without_home_dir_inherits_user_environment() -> None:
+    seen_kwargs: list[dict[str, object]] = []
+
+    def fake_popen(_cmd: list[str], **kwargs: object) -> _FakePopen:
+        seen_kwargs.append(kwargs)
+        return _FakePopen(stdout=_agy_envelope("conv-1"))
+
+    transport = AgyTransport(agy_bin="agy", model="m", popen_fn=fake_popen, sleep_fn=lambda _s: None)
+    Solver(_make_profile(), transport).solve(Question(index=0, prompt="P1"))
+
+    assert seen_kwargs[0].get("env") is None
+    assert seen_kwargs[0].get("cwd") is None

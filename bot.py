@@ -37,7 +37,13 @@ from moodle_quiz_solver.config import (
 from moodle_quiz_solver.domain import BackendKind, SubjectProfile
 from moodle_quiz_solver.exceptions import ConfigurationError, QuizPageError
 from moodle_quiz_solver.quiz_page import QuizPage, open_quiz_page
-from moodle_quiz_solver.solver import AgyTransport, GenAiTransport, ModelTransport, Solver
+from moodle_quiz_solver.solver import (
+    AgyTransport,
+    GenAiTransport,
+    ModelTransport,
+    Solver,
+    default_agy_home,
+)
 from moodle_quiz_solver.tui import TuiSession, run_tui
 
 
@@ -145,6 +151,7 @@ def _build_transport(
             agy_bin=selection.agy_bin,
             model=selection.agy_model,
             cancellation=cancellation,
+            home_dir=default_agy_home(),
         )
 
     if not selection.gemini_api_key:
